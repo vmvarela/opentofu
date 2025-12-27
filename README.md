@@ -11,9 +11,9 @@
 
 This fork is maintained **independently** because:
 
-1. **AI-Generated Code**: The ORAS backend implementation was developed with AI assistance (GitHub Copilot). The upstream OpenTofu project has a [strict policy against AI-generated code](https://github.com/opentofu/opentofu/blob/main/CONTRIBUTING.md) due to licensing concerns with Terraform's BSL license.
+1. **AI-Generated Code**: The ORAS backend implementation was developed with AI assistance (GitHub Copilot). The upstream OpenTofu project [discourages AI coding assistants](https://github.com/opentofu/opentofu/blob/main/contributing/DEVELOPING.md#a-note-on-copyright) because LLMs may have been trained on BSL-licensed Terraform code.
 
-2. **Experimental Backend**: OpenTofu historically avoids adding new remote state backends to the core project. This fork serves as a reference implementation and a usable solution for those who want OCI registry state storage.
+2. **Experimental Backend**: OpenTofu/Terraform Core has not added new remote state backends in years, preferring the generic HTTP backend for custom implementations. This fork provides a native OCI registry solution.
 
 This fork stays synchronized with upstream releases, allowing you to benefit from all OpenTofu improvements while having access to the ORAS backend.
 

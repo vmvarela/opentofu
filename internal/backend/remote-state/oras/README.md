@@ -4,7 +4,7 @@
 
 This backend is an experiment/reference implementation for storing OpenTofu state in an OCI registry via [ORAS](https://oras.land/).
 
-Terraform Core historically avoids new remote state backends upstream. If these changes are not accepted, the intent is for this package to remain as documentation and a starting point for downstream forks.
+OpenTofu/Terraform Core has not added new remote state backends in years, preferring the generic HTTP backend for custom implementations. This package serves as a reference implementation and starting point for those who want native OCI registry state storage.
 
 ## The Big Idea
 
