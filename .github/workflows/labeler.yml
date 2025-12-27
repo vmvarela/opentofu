@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Label PR by size
-        uses: codelytv/pr-size-labeler@56f6f0fc35c7cc0f72963b8571fabd12128e252c # v1.10.1
+        uses: codelytv/pr-size-labeler@v1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           xs_label: 'size/XS'
