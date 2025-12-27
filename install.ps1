@@ -116,11 +116,12 @@ Write-Host ""
 Write-Info "Binary installed: $InstallPath"
 
 try {
-    $versionOutput = & $InstallPath version 2>$null
+    $versionOutput = & $InstallPath version 2>&1
     Write-Info "Version: $versionOutput"
 }
 catch {
-    Write-Info "Version: $Version"
+    Write-Err "Failed to retrieve version from installed binary: $_"
+    Write-Info "Version (expected): $Version"
 }
 
 Write-Host ""
