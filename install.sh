@@ -123,10 +123,12 @@ main() {
     TMP_FILE="${TMP_DIR}/${ARTIFACT_NAME}"
     
     # Download
-    download "$DOWNLOAD_URL" "$TMP_FILE"
+    if ! download "$DOWNLOAD_URL" "$TMP_FILE"; then
+        error "Download failed while fetching ${ARTIFACT_NAME} for version ${VERSION} from ${DOWNLOAD_URL}. This may be due to a network issue, an incorrect TOFU_ORAS_VERSION, or a missing release artifact."
+    fi
     
     if [ ! -f "$TMP_FILE" ]; then
-        error "Download failed"
+        error "Download failed: temporary file ${TMP_FILE} was not created."
     fi
     
     # Make executable
