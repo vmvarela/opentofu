@@ -124,11 +124,39 @@ main() {
     
     # Download
     if ! download "$DOWNLOAD_URL" "$TMP_FILE"; then
-        error "Download failed while fetching ${ARTIFACT_NAME} for version ${VERSION} from ${DOWNLOAD_URL}. This may be due to a network issue, an incorrect TOFU_ORAS_VERSION, or a missing release artifact."
-    fi
+    # Download binary
+    download "$DOWNLOAD_URL" "$TMP_FILE"
     
     if [ ! -f "$TMP_FILE" ]; then
-        error "Download failed: temporary file ${TMP_FILE} was not created."
+        error "Download failed"
+    fi
+    
+    # Download and verify checksum
+    CHECKSUMS_URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/SHA256SUMS"
+    CHECKSUMS_FILE="${TMP_DIR}/SHA256SUMS"
+    
+    info "Downloading checksums from: ${CHECKSUMS_URL}"
+    download "$CHECKSUMS_URL" "$CHECKSUMS_FILE"
+    
+    if [ ! -f "$CHECKSUMS_FILE" ]; then
+        error "Failed to download checksum file"
+    fi
+    
+    EXPECTED_SUM=$(grep "  ${ARTIFACT_NAME}\$" "$CHECKSUMS_FILE" | awk '{print $1}')
+    if [ -z "$EXPECTED_SUM" ]; then
+        error "No checksum entry found for ${ARTIFACT_NAME} in SHA256SUMS"
+    fi
+    
+    if command -v sha256sum >/dev/null 2>&1; then
+        ACTUAL_SUM=$(sha256sum "$TMP_FILE" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        ACTUAL_SUM=$(shasum -a 256 "$TMP_FILE" | awk '{print $1}')
+    else
+        error "Neither sha256sum nor shasum is available; cannot verify checksum"
+    fi
+    
+    if [ "$EXPECTED_SUM" != "$ACTUAL_SUM" ]; then
+        error "Checksum verification failed for ${ARTIFACT_NAME}"
     fi
     
     # Make executable
