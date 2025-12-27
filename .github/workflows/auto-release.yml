@@ -28,7 +28,7 @@ jobs:
           PR_TITLE="${{ github.event.pull_request.title }}"
           VERSION=$(echo "$PR_TITLE" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=${VERSION}-oci" >> $GITHUB_OUTPUT
+          echo "tag=${VERSION}-oras" >> $GITHUB_OUTPUT
           echo "Extracted version: $VERSION"
 
       - name: Configure Git

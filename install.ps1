@@ -2,7 +2,7 @@
 # Usage: irm https://raw.githubusercontent.com/vmvarela/opentofu/develop/install.ps1 | iex
 #
 # Or with options:
-#   $env:TOFU_ORAS_VERSION = "v1.12.0-oci"
+#   $env:TOFU_ORAS_VERSION = "v1.12.0-oras"
 #   $env:TOFU_ORAS_INSTALL_DIR = "$env:USERPROFILE\.local\bin"
 #   irm https://raw.githubusercontent.com/vmvarela/opentofu/develop/install.ps1 | iex
 

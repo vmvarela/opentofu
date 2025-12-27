@@ -23,15 +23,15 @@ develop   → Main development branch (all PRs target here)
 1. **Sync upstream**: `sync-upstream.yml` runs daily and when new upstream tags are detected
 2. **PR to develop**: Creates PR `🚀 Release vX.Y.Z` from `main` → `develop`
 3. **Review & merge**: Manually merge the PR (resolve conflicts if any)
-4. **Auto-release**: `auto-release.yml` creates tag `vX.Y.Z-oci` and GitHub Release
+4. **Auto-release**: `auto-release.yml` creates tag `vX.Y.Z-oras` and GitHub Release
 5. **Build**: `release-fork.yml` builds binaries for all platforms
 
 ## Release Naming Convention
 
-Fork releases follow upstream versions with `-oci` suffix:
+Fork releases follow upstream versions with `-oras` suffix:
 
 - Upstream: `v1.12.0`
-- Fork: `v1.12.0-oci`
+- Fork: `v1.12.0-oras`
 
 This allows users to choose which upstream version they want with ORAS support.
 

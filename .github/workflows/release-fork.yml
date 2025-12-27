@@ -126,7 +126,7 @@ jobs:
       - name: Set embedded version
         run: |
           # The version package reads from version/VERSION at build time.
-          # Our tags are like v1.11.2-oci, but VERSION must be SemVer without the leading 'v'.
+          # Our tags are like v1.11.2-oras, but VERSION must be SemVer without the leading 'v'.
           echo "${GITHUB_REF_NAME#v}" > version/VERSION
           echo "Embedded VERSION: $(cat version/VERSION)"
       

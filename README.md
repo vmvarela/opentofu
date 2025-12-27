@@ -85,12 +85,12 @@ See the [ORAS Backend README](internal/backend/remote-state/oras/README.md) for 
 
 ## 🔄 Release Versioning
 
-This fork follows OpenTofu releases with an `-oci` suffix:
+This fork follows OpenTofu releases with an `-oras` suffix:
 
 | OpenTofu Release | This Fork |
 |------------------|-----------|
-| `v1.12.0` | `v1.12.0-oci` |
-| `v1.11.1` | `v1.11.1-oci` |
+| `v1.12.0` | `v1.12.0-oras` |
+| `v1.11.1` | `v1.11.1-oras` |
 
 This allows you to choose which OpenTofu version you want with ORAS support.
 
@@ -117,7 +117,7 @@ This installs the binary as `tofu-oras` to avoid conflicts with the official `to
 **Linux/macOS:**
 ```bash
 # Install specific version
-TOFU_ORAS_VERSION=v1.12.0-oci curl -sSL https://raw.githubusercontent.com/vmvarela/opentofu/develop/install.sh | sh
+TOFU_ORAS_VERSION=v1.12.0-oras curl -sSL https://raw.githubusercontent.com/vmvarela/opentofu/develop/install.sh | sh
 
 # Install to custom directory
 TOFU_ORAS_INSTALL_DIR=~/.local/bin curl -sSL https://raw.githubusercontent.com/vmvarela/opentofu/develop/install.sh | sh
@@ -129,7 +129,7 @@ TOFU_ORAS_BINARY_NAME=tofu curl -sSL https://raw.githubusercontent.com/vmvarela/
 **Windows PowerShell:**
 ```powershell
 # Install specific version
-$env:TOFU_ORAS_VERSION = "v1.12.0-oci"
+$env:TOFU_ORAS_VERSION = "v1.12.0-oras"
 irm https://raw.githubusercontent.com/vmvarela/opentofu/develop/install.ps1 | iex
 
 # Install to custom directory
