@@ -59,6 +59,12 @@ type PlanGraphBuilder struct {
 	// skipRefresh indicates that we should skip refreshing managed resources
 	skipRefresh bool
 
+	// refreshMode specifies how refresh should be handled (all, none, or changed)
+	refreshMode RefreshMode
+
+	// refreshTracker tracks which resources need refresh in smart refresh mode
+	refreshTracker *RefreshTracker
+
 	// preDestroyRefresh indicates that we are executing the refresh which
 	// happens immediately before a destroy plan, which happens to use the
 	// normal planing mode so skipPlanChanges cannot be set.
@@ -297,6 +303,8 @@ func (b *PlanGraphBuilder) initPlan() {
 		return &nodeExpandPlannableResource{
 			NodeAbstractResource: a,
 			skipRefresh:          b.skipRefresh,
+			refreshMode:          b.refreshMode,
+			refreshTracker:       b.refreshTracker,
 			skipPlanChanges:      b.skipPlanChanges,
 			preDestroyRefresh:    b.preDestroyRefresh,
 			forceReplace:         b.ForceReplace,
@@ -307,6 +315,8 @@ func (b *PlanGraphBuilder) initPlan() {
 		return &NodePlannableResourceInstanceOrphan{
 			NodeAbstractResourceInstance: a,
 			skipRefresh:                  b.skipRefresh,
+			refreshMode:                  b.refreshMode,
+			refreshTracker:               b.refreshTracker,
 			skipPlanChanges:              b.skipPlanChanges,
 			RemoveStatements:             b.RemoveStatements,
 		}
@@ -318,6 +328,8 @@ func (b *PlanGraphBuilder) initPlan() {
 			DeposedKey:                   key,
 
 			skipRefresh:      b.skipRefresh,
+			refreshMode:      b.refreshMode,
+			refreshTracker:   b.refreshTracker,
 			skipPlanChanges:  b.skipPlanChanges,
 			RemoveStatements: b.RemoveStatements,
 		}
@@ -331,6 +343,8 @@ func (b *PlanGraphBuilder) initDestroy() {
 		return &NodePlanDestroyableResourceInstance{
 			NodeAbstractResourceInstance: a,
 			skipRefresh:                  b.skipRefresh,
+			refreshMode:                  b.refreshMode,
+			refreshTracker:               b.refreshTracker,
 		}
 	}
 }

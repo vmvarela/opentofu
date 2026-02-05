@@ -32,6 +32,12 @@ type nodeExpandPlannableResource struct {
 	// skipRefresh indicates that we should skip refreshing individual instances
 	skipRefresh bool
 
+	// refreshMode specifies how refresh should be handled (all, none, or changed)
+	refreshMode RefreshMode
+
+	// refreshTracker tracks which resources need refresh in smart refresh mode
+	refreshTracker *RefreshTracker
+
 	preDestroyRefresh bool
 
 	// skipPlanChanges indicates we should skip trying to plan change actions
@@ -385,6 +391,8 @@ func (n *nodeExpandPlannableResource) resourceInstanceSubgraph(ctx context.Conte
 			// nodes that have it.
 			ForceCreateBeforeDestroy: n.CreateBeforeDestroy(),
 			skipRefresh:              n.skipRefresh,
+			refreshMode:              n.refreshMode,
+			refreshTracker:           n.refreshTracker,
 			skipPlanChanges:          n.skipPlanChanges,
 			forceReplace:             n.forceReplace,
 		}
