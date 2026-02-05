@@ -355,7 +355,52 @@ func (n *NodePlannableResourceInstance) managedResourceExecute(ctx context.Conte
 
 	// Refresh, maybe
 	// The import process handles its own refresh
-	if !n.skipRefresh && !importing {
+	shouldRefresh := !n.skipRefresh && !importing
+
+	// Handle smart refresh mode (RefreshChanged)
+	if shouldRefresh && n.refreshMode == RefreshChanged {
+		// In smart refresh mode, we only refresh if:
+		// 1. The resource's configuration has changed, OR
+		// 2. An upstream dependency has changes (tracked via RefreshTracker)
+
+		// Check if any upstream dependency requires us to refresh
+		upstreamNeedsRefresh := false
+		if n.refreshTracker != nil && len(n.Dependencies) > 0 {
+			upstreamNeedsRefresh = n.refreshTracker.CheckUpstreamNeedsRefresh(n.Dependencies)
+			if upstreamNeedsRefresh {
+				log.Printf("[TRACE] managedResourceExecute: %s has upstream dependency that needs refresh", addr)
+			}
+		}
+
+		if !upstreamNeedsRefresh {
+			// Check if this resource's own configuration has changed
+			configChanged, detectDiags := n.detectConfigChange(ctx, evalCtx, instanceRefreshState)
+			diags = diags.Append(detectDiags)
+			if detectDiags.HasErrors() {
+				// On error, fall back to refreshing to be safe
+				configChanged = true
+			}
+
+			if !configChanged {
+				log.Printf("[TRACE] managedResourceExecute: %s configuration unchanged and no upstream changes, skipping refresh", addr)
+				shouldRefresh = false
+			} else {
+				log.Printf("[TRACE] managedResourceExecute: %s configuration changed, will refresh", addr)
+			}
+		}
+
+		// Mark this resource in the tracker so downstream dependencies know
+		if n.refreshTracker != nil && shouldRefresh {
+			n.refreshTracker.MarkNeedsRefresh(addr)
+		}
+
+		// Record statistics
+		if n.refreshTracker != nil {
+			n.refreshTracker.RecordRefreshDecision(shouldRefresh)
+		}
+	}
+
+	if shouldRefresh {
 		s, refreshDiags := n.refresh(ctx, evalCtx, states.NotDeposed, instanceRefreshState)
 		diags = diags.Append(refreshDiags)
 		if diags.HasErrors() {
