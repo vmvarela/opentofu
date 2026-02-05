@@ -1,3 +1,35 @@
+# Ghoten
+
+[![Release](https://github.com/vmvarela/opentofu/actions/workflows/ghoten-release.yaml/badge.svg)](https://github.com/vmvarela/opentofu/actions/workflows/ghoten-release.yaml)
+[![Integration](https://github.com/vmvarela/opentofu/actions/workflows/ghoten-integration.yaml/badge.svg)](https://github.com/vmvarela/opentofu/actions/workflows/ghoten-integration.yaml)
+[![Sync](https://github.com/vmvarela/opentofu/actions/workflows/ghoten-sync.yaml/badge.svg)](https://github.com/vmvarela/opentofu/actions/workflows/ghoten-sync.yaml)
+[![Latest Release](https://img.shields.io/github/v/release/vmvarela/opentofu?label=ghoten&color=purple)](https://github.com/vmvarela/opentofu/releases/latest)
+
+**Ghoten** is a fork of [OpenTofu](https://opentofu.org) with additional features:
+
+- 🗄️ **ORAS/OCI Backend**: Store state in OCI registries (GHCR, ECR, ACR, Docker Hub)
+- ⚡ **Smart Refresh**: Improved refresh behavior for large state files
+
+## Quick Start
+
+```bash
+# Download latest release
+curl -LO https://github.com/vmvarela/opentofu/releases/latest/download/ghoten_26.2.1_linux_amd64.tar.gz
+tar -xzf ghoten_26.2.1_linux_amd64.tar.gz
+sudo mv ghoten /usr/local/bin/
+ghoten version
+```
+
+### GitHub Actions
+
+```yaml
+- uses: vmvarela/opentofu@v26.2.1
+- run: ghoten init
+- run: ghoten plan
+```
+
+---
+
 # OpenTofu
 
 - [HomePage](https://opentofu.org/)
