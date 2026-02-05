@@ -28,6 +28,12 @@ type NodePlanDestroyableResourceInstance struct {
 
 	// skipRefresh indicates that we should skip refreshing
 	skipRefresh bool
+
+	// refreshMode specifies how refresh should be handled (all, none, or changed)
+	refreshMode RefreshMode
+
+	// refreshTracker tracks which resources need refresh in smart refresh mode
+	refreshTracker *RefreshTracker
 }
 
 var (
