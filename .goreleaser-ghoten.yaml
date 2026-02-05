@@ -1,6 +1,5 @@
 # Ghoten GoReleaser Configuration
-# Simplified configuration for GitHub Releases only.
-# No Docker, Snap, or PackageCloud publishing.
+# Configuration for GitHub Releases and Docker images.
 
 project_name: ghoten
 
@@ -102,10 +101,124 @@ release:
     
     ---
     
+    ### 🐳 Docker Images
+    
+    ```bash
+    # Full image (Alpine-based with git, bash, openssh)
+    docker pull ghcr.io/vmvarela/ghoten:{{ .Version }}
+    
+    # Minimal image (scratch-based, just the binary)
+    docker pull ghcr.io/vmvarela/ghoten:{{ .Version }}-minimal
+    ```
+    
     **Full Changelog**: https://github.com/vmvarela/opentofu/compare/{{ .PreviousTag }}...{{ .Tag }}
     
     Based on OpenTofu. See [upstream releases](https://github.com/opentofu/opentofu/releases) for core changes.
 
-# No Docker builds
-# No Snap builds  
-# No package signing (simplified)
+# Docker images
+dockers:
+  # Full image - amd64
+  - use: buildx
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.vendor=vmvarela"
+      - "--label=org.opencontainers.image.description=Ghoten {{ .Version }} - OpenTofu fork with ORAS backend"
+      - "--label=org.opencontainers.image.url=https://github.com/vmvarela/opentofu"
+      - "--label=org.opencontainers.image.source=https://github.com/vmvarela/opentofu"
+      - "--label=org.opencontainers.image.licenses=MPL-2.0"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ time \"2006-01-02T15:04:05Z07:00\" }}"
+    image_templates:
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-amd64"
+
+  # Full image - arm64
+  - use: buildx
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.vendor=vmvarela"
+      - "--label=org.opencontainers.image.description=Ghoten {{ .Version }} - OpenTofu fork with ORAS backend"
+      - "--label=org.opencontainers.image.url=https://github.com/vmvarela/opentofu"
+      - "--label=org.opencontainers.image.source=https://github.com/vmvarela/opentofu"
+      - "--label=org.opencontainers.image.licenses=MPL-2.0"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ time \"2006-01-02T15:04:05Z07:00\" }}"
+    image_templates:
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-arm64"
+
+  # Minimal image - amd64
+  - use: buildx
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile.minimal
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}-minimal"
+      - "--label=org.opencontainers.image.vendor=vmvarela"
+      - "--label=org.opencontainers.image.description=Ghoten {{ .Version }} minimal - OpenTofu fork with ORAS backend"
+      - "--label=org.opencontainers.image.url=https://github.com/vmvarela/opentofu"
+      - "--label=org.opencontainers.image.source=https://github.com/vmvarela/opentofu"
+      - "--label=org.opencontainers.image.licenses=MPL-2.0"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ time \"2006-01-02T15:04:05Z07:00\" }}"
+    image_templates:
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-minimal-amd64"
+
+  # Minimal image - arm64
+  - use: buildx
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile.minimal
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}-minimal"
+      - "--label=org.opencontainers.image.vendor=vmvarela"
+      - "--label=org.opencontainers.image.description=Ghoten {{ .Version }} minimal - OpenTofu fork with ORAS backend"
+      - "--label=org.opencontainers.image.url=https://github.com/vmvarela/opentofu"
+      - "--label=org.opencontainers.image.source=https://github.com/vmvarela/opentofu"
+      - "--label=org.opencontainers.image.licenses=MPL-2.0"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ time \"2006-01-02T15:04:05Z07:00\" }}"
+    image_templates:
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-minimal-arm64"
+
+# Docker manifests for multi-arch support
+docker_manifests:
+  # Main versioned tag (multi-arch)
+  - name_template: "ghcr.io/vmvarela/ghoten:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-amd64"
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-arm64"
+
+  # Minimal versioned tag (multi-arch)
+  - name_template: "ghcr.io/vmvarela/ghoten:{{ .Version }}-minimal"
+    image_templates:
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-minimal-amd64"
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-minimal-arm64"
+
+  # Latest tag (multi-arch)
+  - name_template: "ghcr.io/vmvarela/ghoten:latest"
+    image_templates:
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-amd64"
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-arm64"
+
+  # Latest minimal tag (multi-arch)
+  - name_template: "ghcr.io/vmvarela/ghoten:latest-minimal"
+    image_templates:
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-minimal-amd64"
+      - "ghcr.io/vmvarela/ghoten:{{ .Version }}-minimal-arm64"
