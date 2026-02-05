@@ -39,20 +39,13 @@ builds:
         goarch: arm64
 
 archives:
+  # Single archive: tar.gz for Linux/macOS, zip for Windows
   - format: tar.gz
-    id: targz
+    id: default
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
         format: zip
-    files:
-      - LICENSE
-      - README.md
-      - CHANGELOG.md
-
-  - format: zip
-    id: zip
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README.md
