@@ -25,6 +25,7 @@ import (
 	"github.com/opentofu/opentofu/internal/logging"
 	"github.com/opentofu/opentofu/internal/plans"
 	"github.com/opentofu/opentofu/internal/tfdiags"
+	"github.com/opentofu/opentofu/internal/tofu"
 )
 
 var planConfigurationVersionsPollInterval = 500 * time.Millisecond
@@ -134,6 +135,17 @@ func (b *Remote) opPlan(ctx, stopCtx, cancelCtx context.Context, op *backend.Ope
 			tfdiags.Error,
 			"-exclude option is not supported",
 			"The -exclude option is not currently supported for remote plans.",
+		))
+	}
+
+	// Warn if -refresh=changed is used with remote backend
+	if op.PlanRefreshMode == tofu.RefreshChanged {
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Warning,
+			"-refresh=changed is not supported by remote backend",
+			"The remote backend does not support smart refresh mode. The plan will "+
+				"use standard refresh behavior instead. Smart refresh is only available "+
+				"when running plans locally.",
 		))
 	}
 
