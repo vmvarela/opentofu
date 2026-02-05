@@ -1097,6 +1097,168 @@ func (n *NodeAbstractResourceInstance) refresh(ctx context.Context, evalCtx Eval
 	return ret, diags
 }
 
+// detectConfigChange determines whether the resource configuration has changed
+// compared to the current state. This is used for smart refresh mode to decide
+// whether a resource needs to be refreshed.
+//
+// The comparison ignores null attributes on both sides to avoid false positives
+// when provider schemas add new optional attributes.
+//
+// Returns true if the configuration has changed, false if the configuration matches the state.
+//
+// Note: Schema version upgrades are handled before this function is called,
+// so we don't need to check schema versions here.
+func (n *NodeAbstractResourceInstance) detectConfigChange(
+	ctx context.Context,
+	evalCtx EvalContext,
+	state *states.ResourceInstanceObject,
+) (bool, tfdiags.Diagnostics) {
+	var diags tfdiags.Diagnostics
+
+	// If there's no state, the resource is new - definitely needs refresh
+	if state == nil {
+		log.Printf("[TRACE] detectConfigChange: %s has no state, marking as changed", n.Addr)
+		return true, diags
+	}
+
+	// If there's no config, it's an orphan - will be handled separately
+	if n.Config == nil {
+		log.Printf("[TRACE] detectConfigChange: %s has no config (orphan), marking as changed", n.Addr)
+		return true, diags
+	}
+
+	_, providerSchema, err := n.getProvider(ctx, evalCtx)
+	if err != nil {
+		return true, diags.Append(err)
+	}
+
+	schema, _ := providerSchema.SchemaForResourceAddr(n.Addr.Resource.ContainingResource())
+	if schema == nil {
+		// Should be caught during validation, so we don't bother with a pretty error here
+		diags = diags.Append(fmt.Errorf("provider does not support resource type %q", n.Addr.Resource.Resource.Type))
+		return true, diags
+	}
+
+	// Evaluate the configuration to get the config value
+	forEach, _ := evaluateForEachExpression(ctx, n.Config.ForEach, evalCtx, n.Addr.ContainingResource().Config())
+	keyData := EvalDataForInstanceKey(n.Addr.Resource.Key, forEach)
+	configVal, _, configDiags := evalCtx.EvaluateBlock(ctx, n.Config.Config, schema, n.Addr.Resource, keyData)
+	diags = diags.Append(configDiags)
+	if configDiags.HasErrors() {
+		// If we can't evaluate config, assume it changed to be safe
+		return true, diags
+	}
+
+	// Get unmarked versions for comparison
+	unmarkedConfigVal, _ := configVal.UnmarkDeep()
+	unmarkedPriorVal, _ := state.Value.UnmarkDeep()
+
+	// Generate what the proposed new value would be
+	proposedNewVal := objchange.ProposedNew(schema, unmarkedPriorVal, unmarkedConfigVal)
+
+	// Compare the proposed new value with the prior state value
+	// We use a comparison that ignores null values to handle the case where
+	// new optional attributes are added to the schema
+	hasChanges := !valuesEqualIgnoringNulls(unmarkedPriorVal, proposedNewVal, schema)
+
+	if hasChanges {
+		log.Printf("[TRACE] detectConfigChange: %s configuration has changed", n.Addr)
+	} else {
+		log.Printf("[TRACE] detectConfigChange: %s configuration unchanged", n.Addr)
+	}
+
+	return hasChanges, diags
+}
+
+// valuesEqualIgnoringNulls compares two cty values, treating null values as
+// equal regardless of their position in the structure. This is useful for
+// comparing configuration with state when new optional attributes may have
+// been added to the schema.
+func valuesEqualIgnoringNulls(a, b cty.Value, schema *configschema.Block) bool {
+	if a.IsNull() && b.IsNull() {
+		return true
+	}
+	if a.IsNull() || b.IsNull() {
+		// One is null, the other isn't - check if the non-null one is "empty"
+		nonNull := a
+		if a.IsNull() {
+			nonNull = b
+		}
+		// If the non-null value is an empty object/map, treat as equal to null
+		if nonNull.Type().IsObjectType() || nonNull.Type().IsMapType() {
+			if nonNull.LengthInt() == 0 {
+				return true
+			}
+		}
+		return false
+	}
+
+	// If types don't match, they're not equal
+	if !a.Type().Equals(b.Type()) {
+		return false
+	}
+
+	// For objects, compare attribute by attribute
+	if a.Type().IsObjectType() {
+		for name := range a.Type().AttributeTypes() {
+			attrA := a.GetAttr(name)
+			attrB := b.GetAttr(name)
+
+			// Get the attribute schema if available
+			var attrSchema *configschema.Block
+			if schema != nil {
+				if attr, ok := schema.Attributes[name]; ok {
+					_ = attr // Attributes don't have nested blocks
+				} else if block, ok := schema.BlockTypes[name]; ok {
+					attrSchema = &block.Block
+				}
+			}
+
+			if !valuesEqualIgnoringNulls(attrA, attrB, attrSchema) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// For lists, tuples, and sets, compare element by element
+	if a.Type().IsListType() || a.Type().IsTupleType() || a.Type().IsSetType() {
+		if a.LengthInt() != b.LengthInt() {
+			return false
+		}
+		aSlice := a.AsValueSlice()
+		bSlice := b.AsValueSlice()
+		for i := range aSlice {
+			if !valuesEqualIgnoringNulls(aSlice[i], bSlice[i], nil) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// For maps, compare key by key
+	if a.Type().IsMapType() {
+		aMap := a.AsValueMap()
+		bMap := b.AsValueMap()
+		if len(aMap) != len(bMap) {
+			return false
+		}
+		for k, aVal := range aMap {
+			bVal, ok := bMap[k]
+			if !ok {
+				return false
+			}
+			if !valuesEqualIgnoringNulls(aVal, bVal, nil) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// For primitive types, use direct equality
+	return a.RawEquals(b)
+}
+
 func (n *NodeAbstractResourceInstance) plan(
 	ctx context.Context,
 	evalCtx EvalContext,

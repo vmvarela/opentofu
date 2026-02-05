@@ -29,6 +29,12 @@ type NodePlannableResourceInstanceOrphan struct {
 	// skipRefresh indicates that we should skip refreshing individual instances
 	skipRefresh bool
 
+	// refreshMode specifies how refresh should be handled (all, none, or changed)
+	refreshMode RefreshMode
+
+	// refreshTracker tracks which resources need refresh in smart refresh mode
+	refreshTracker *RefreshTracker
+
 	// skipPlanChanges indicates we should skip trying to plan change actions
 	// for any instances.
 	skipPlanChanges bool
@@ -153,7 +159,21 @@ func (n *NodePlannableResourceInstanceOrphan) managedResourceExecute(ctx context
 		return diags
 	}
 
-	if !n.skipRefresh {
+	// Orphaned resources should generally be refreshed to detect if they still exist.
+	// In smart refresh mode, we still refresh orphans because:
+	// 1. We can't compare against configuration (there is none)
+	// 2. We need to know the current state for proper destroy planning
+	shouldRefresh := !n.skipRefresh
+
+	// Track that this orphan will be refreshed (for smart refresh statistics)
+	if n.refreshTracker != nil && shouldRefresh && n.refreshMode == RefreshChanged {
+		// Mark this resource as needing refresh so downstream dependencies know
+		n.refreshTracker.MarkNeedsRefresh(addr)
+		n.refreshTracker.RecordRefreshDecision(true)
+		log.Printf("[TRACE] NodePlannableResourceInstanceOrphan: %s is orphaned, will refresh", addr)
+	}
+
+	if shouldRefresh {
 		// Refresh this instance even though it is going to be destroyed, in
 		// order to catch missing resources. If this is a normal plan,
 		// providers expect a Read request to remove missing resources from the
