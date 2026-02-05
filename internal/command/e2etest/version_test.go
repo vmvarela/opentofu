@@ -35,7 +35,7 @@ func TestVersion(t *testing.T) {
 		t.Errorf("unexpected stderr output:\n%s", stderr)
 	}
 
-	wantVersion := fmt.Sprintf("OpenTofu v%s", version.String())
+	wantVersion := fmt.Sprintf("Ghoten v%s", version.String())
 	if !strings.Contains(stdout, wantVersion) {
 		t.Errorf("output does not contain our current version %q:\n%s", wantVersion, stdout)
 	}
@@ -66,7 +66,7 @@ func TestVersionWithProvider(t *testing.T) {
 			t.Errorf("unexpected stderr output:\n%s", stderr)
 		}
 
-		wantVersion := fmt.Sprintf("OpenTofu v%s", version.String())
+		wantVersion := fmt.Sprintf("Ghoten v%s", version.String())
 		if !strings.Contains(stdout, wantVersion) {
 			t.Errorf("output does not contain our current version %q:\n%s", wantVersion, stdout)
 		}

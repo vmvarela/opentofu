@@ -1,0 +1,242 @@
+# Ghoten Release Workflow
+# This workflow builds and publishes releases for the Ghoten fork.
+# It reconstructs a release branch by merging upstream + feature branches + branding.
+#
+# Usage from GitHub UI:
+#   1. Go to Actions → ghoten-release
+#   2. Click "Run workflow"
+#   3. Fill in version (e.g., 26.2.0) and select features
+#   4. Click "Run workflow"
+
+name: ghoten-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (AA.m.d format, e.g., 26.2.0)'
+        required: true
+        type: string
+      include_oci:
+        description: 'Include ORAS/OCI backend'
+        required: true
+        type: boolean
+        default: true
+      include_smart_refresh:
+        description: 'Include smart-refresh feature'
+        required: true
+        type: boolean
+        default: true
+      dry_run:
+        description: 'Dry run (build without publishing)'
+        required: true
+        type: boolean
+        default: false
+
+env:
+  GO_VERSION: '1.22'
+
+jobs:
+  build-release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Validate version format
+        run: |
+          VERSION="${{ inputs.version }}"
+          if ! [[ "$VERSION" =~ ^[0-9]{2}\.[0-9]{1,2}\.[0-9]+$ ]]; then
+            echo "❌ Invalid version format: $VERSION"
+            echo "Expected format: AA.m.d (e.g., 26.2.0 for Feb 2026, first release)"
+            exit 1
+          fi
+          echo "✅ Version format valid: v$VERSION"
+
+      - name: Checkout ghoten/branding
+        uses: actions/checkout@v4
+        with:
+          ref: ghoten/branding
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config rerere.enabled true
+          git config rerere.autoupdate true
+
+      - name: Setup rerere cache from repo
+        run: |
+          mkdir -p .git/rr-cache
+          if [ -d ".rerere-cache" ] && [ "$(ls -A .rerere-cache 2>/dev/null)" ]; then
+            cp -r .rerere-cache/* .git/rr-cache/ || true
+            echo "✅ Loaded $(ls .git/rr-cache | wc -l) rerere entries"
+          else
+            echo "ℹ️ No rerere cache found, starting fresh"
+          fi
+
+      - name: Fetch all branches
+        run: |
+          git fetch origin --prune
+          echo "Available branches:"
+          git branch -a
+
+      - name: Create release branch
+        run: |
+          # Start from main (which tracks upstream)
+          git checkout -B release/ghoten origin/main
+          echo "✅ Created release/ghoten from origin/main"
+
+      - name: Merge ORAS/OCI backend
+        if: inputs.include_oci
+        id: merge_oci
+        run: |
+          echo "::group::Merging backend/oci"
+          if git rev-parse --verify origin/backend/oci >/dev/null 2>&1; then
+            if git merge --squash origin/backend/oci; then
+              git commit -m "feat(backend): add ORAS/OCI backend"
+              echo "✅ Merged backend/oci"
+              echo "status=success" >> $GITHUB_OUTPUT
+            else
+              # Check if rerere auto-resolved
+              REMAINING=$(git rerere remaining 2>/dev/null || echo "")
+              if [ -z "$REMAINING" ]; then
+                echo "✅ Rerere auto-resolved conflicts for backend/oci"
+                git add -A
+                git commit -m "feat(backend): add ORAS/OCI backend"
+                echo "status=auto-resolved" >> $GITHUB_OUTPUT
+              else
+                echo "❌ Unresolved conflicts in backend/oci:"
+                echo "$REMAINING"
+                git diff
+                git merge --abort || true
+                echo "status=failed" >> $GITHUB_OUTPUT
+                exit 1
+              fi
+            fi
+          else
+            echo "⚠️ Branch backend/oci not found, skipping"
+            echo "status=skipped" >> $GITHUB_OUTPUT
+          fi
+          echo "::endgroup::"
+
+      - name: Merge smart-refresh feature
+        if: inputs.include_smart_refresh
+        id: merge_smart_refresh
+        run: |
+          echo "::group::Merging feature/smart-refresh"
+          if git rev-parse --verify origin/feature/smart-refresh >/dev/null 2>&1; then
+            if git merge --squash origin/feature/smart-refresh; then
+              git commit -m "feat: add smart refresh"
+              echo "✅ Merged feature/smart-refresh"
+              echo "status=success" >> $GITHUB_OUTPUT
+            else
+              # Check if rerere auto-resolved
+              REMAINING=$(git rerere remaining 2>/dev/null || echo "")
+              if [ -z "$REMAINING" ]; then
+                echo "✅ Rerere auto-resolved conflicts for feature/smart-refresh"
+                git add -A
+                git commit -m "feat: add smart refresh"
+                echo "status=auto-resolved" >> $GITHUB_OUTPUT
+              else
+                echo "❌ Unresolved conflicts in feature/smart-refresh:"
+                echo "$REMAINING"
+                git diff
+                git merge --abort || true
+                echo "status=failed" >> $GITHUB_OUTPUT
+                exit 1
+              fi
+            fi
+          else
+            echo "⚠️ Branch feature/smart-refresh not found, skipping"
+            echo "status=skipped" >> $GITHUB_OUTPUT
+          fi
+          echo "::endgroup::"
+
+      - name: Merge branding changes
+        id: merge_branding
+        run: |
+          echo "::group::Merging ghoten/branding"
+          if git merge --squash origin/ghoten/branding; then
+            git commit -m "chore: apply Ghoten branding" || echo "No branding changes to commit"
+            echo "✅ Merged ghoten/branding"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            REMAINING=$(git rerere remaining 2>/dev/null || echo "")
+            if [ -z "$REMAINING" ]; then
+              echo "✅ Rerere auto-resolved conflicts for branding"
+              git add -A
+              git commit -m "chore: apply Ghoten branding"
+              echo "status=auto-resolved" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Unresolved conflicts in branding:"
+              echo "$REMAINING"
+              git diff
+              git merge --abort || true
+              echo "status=failed" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          fi
+          echo "::endgroup::"
+
+      - name: Update VERSION file
+        run: |
+          echo "${{ inputs.version }}" > version/VERSION
+          git add version/VERSION
+          git commit -m "chore: set version to ${{ inputs.version }}"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run tests (post-merge validation)
+        run: |
+          echo "::group::Building..."
+          go build ./...
+          echo "::endgroup::"
+          
+          echo "::group::Running tests..."
+          go test -short ./...
+          echo "::endgroup::"
+
+      - name: Create and push tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          TAG="v${{ inputs.version }}"
+          git tag -a "$TAG" -m "Ghoten release $TAG"
+          git push origin "$TAG"
+          echo "✅ Created and pushed tag: $TAG"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          version: latest
+          args: release --clean --config .goreleaser-ghoten.yaml ${{ inputs.dry_run && '--snapshot' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save rerere cache
+        if: always()
+        run: |
+          if [ -d ".git/rr-cache" ] && [ "$(ls -A .git/rr-cache 2>/dev/null)" ]; then
+            mkdir -p .rerere-cache
+            cp -r .git/rr-cache/* .rerere-cache/ || true
+            echo "Rerere cache entries: $(ls .rerere-cache | wc -l)"
+          fi
+
+      - name: Summary
+        run: |
+          echo "## 🚀 Ghoten Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** v${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run:** ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Features Included" >> $GITHUB_STEP_SUMMARY
+          echo "| Feature | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ORAS/OCI Backend | ${{ inputs.include_oci && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Smart Refresh | ${{ inputs.include_smart_refresh && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY

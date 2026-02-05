@@ -1,0 +1,11 @@
+# Rerere Cache Directory
+# This directory stores git rerere (reuse recorded resolution) entries.
+# It is used by the release workflow to automatically resolve known conflicts.
+#
+# To update this cache after resolving conflicts locally:
+#   1. Run ./scripts/ghoten-resolve.sh
+#   2. Resolve any conflicts manually
+#   3. The script will update this directory
+#   4. Commit and push: git add .rerere-cache/ && git commit -m "chore: update rerere cache"
+#
+# See: https://git-scm.com/docs/git-rerere

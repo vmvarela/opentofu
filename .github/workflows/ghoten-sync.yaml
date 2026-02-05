@@ -1,0 +1,131 @@
+# Ghoten Upstream Sync Workflow
+# Automatically syncs the fork's main branch with upstream opentofu/opentofu.
+# Runs daily at 3AM UTC and can be triggered manually.
+
+name: ghoten-sync
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # Daily at 3AM UTC
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Sync with Upstream
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/opentofu/opentofu.git || true
+          git fetch upstream main --tags
+
+      - name: Check for new commits
+        id: check
+        run: |
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          LOCAL_SHA=$(git rev-parse origin/main)
+          
+          if [ "$UPSTREAM_SHA" = "$LOCAL_SHA" ]; then
+            echo "✅ Already up to date with upstream"
+            echo "needs_sync=false" >> $GITHUB_OUTPUT
+          else
+            COMMITS_BEHIND=$(git rev-list --count origin/main..upstream/main)
+            echo "📥 $COMMITS_BEHIND commits behind upstream"
+            echo "needs_sync=true" >> $GITHUB_OUTPUT
+            echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
+            echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Sync main with upstream
+        if: steps.check.outputs.needs_sync == 'true'
+        id: sync
+        run: |
+          # Fast-forward merge (main should be a clean mirror of upstream)
+          if git merge upstream/main --ff-only; then
+            echo "✅ Fast-forward merge successful"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Cannot fast-forward, main has diverged from upstream"
+            echo "status=diverged" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push changes
+        if: steps.check.outputs.needs_sync == 'true' && steps.sync.outputs.status == 'success'
+        run: |
+          git push origin main
+          echo "✅ Pushed ${{ steps.check.outputs.commits_behind }} new commits to main"
+
+      - name: Create issue on divergence
+        if: steps.sync.outputs.status == 'diverged'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '⚠️ Fork main branch has diverged from upstream';
+            const body = `The \`main\` branch cannot be fast-forwarded to upstream.
+            
+            This usually means commits were made directly to main instead of feature branches.
+            
+            **Action Required:**
+            1. Review commits on main that are not in upstream
+            2. Move any changes to appropriate feature branches
+            3. Reset main to upstream: \`git reset --hard upstream/main\`
+            
+            Upstream SHA: \`${{ steps.check.outputs.upstream_sha }}\`
+            `;
+            
+            // Check if issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'sync-conflict'
+            });
+            
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['sync-conflict', 'ghoten']
+              });
+            }
+
+      - name: Trigger integration test
+        if: steps.check.outputs.needs_sync == 'true' && steps.sync.outputs.status == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ghoten-integration.yaml',
+              ref: 'ghoten/branding'
+            });
+
+      - name: Summary
+        run: |
+          echo "## 🔄 Upstream Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check.outputs.needs_sync }}" = "true" ]; then
+            echo "**Commits synced:** ${{ steps.check.outputs.commits_behind }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Status:** ${{ steps.sync.outputs.status }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** Already up to date ✅" >> $GITHUB_STEP_SUMMARY
+          fi

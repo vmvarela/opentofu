@@ -1,0 +1,111 @@
+# Ghoten GoReleaser Configuration
+# Simplified configuration for GitHub Releases only.
+# No Docker, Snap, or PackageCloud publishing.
+
+project_name: ghoten
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+
+    main: ./cmd/tofu
+
+    binary: ghoten
+
+    flags:
+      - "-mod=readonly"
+      - "-trimpath"
+
+    ldflags:
+      - "-s -w"
+      - "-X 'github.com/opentofu/opentofu/version.dev=no'"
+
+    goos:
+      - linux
+      - windows
+      - darwin
+
+    goarch:
+      - amd64
+      - arm64
+
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  # Single archive: tar.gz for Linux/macOS, zip for Windows
+  - format: tar.gz
+    id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
+  algorithm: sha256
+
+snapshot:
+  name_template: "{{ .Version }}-next"
+
+changelog:
+  use: github-native
+
+release:
+  # GitHub release settings
+  github:
+    owner: vmvarela
+    name: opentofu
+  
+  # Release naming
+  name_template: "Ghoten v{{ .Version }}"
+  
+  # Don't mark as draft - publish directly
+  draft: false
+  
+  # Determine prerelease from version (contains -alpha, -beta, -rc)
+  prerelease: auto
+  
+  # Release header
+  header: |
+    ## Ghoten v{{ .Version }}
+    
+    This is a custom release of [OpenTofu](https://opentofu.org) with additional features:
+    - **ORAS/OCI Backend**: Store state in OCI registries (GHCR, ECR, ACR, Docker Hub)
+    - **Smart Refresh**: Improved refresh behavior for large state files
+    
+    ### Installation
+    
+    Download the appropriate archive for your platform and extract the `ghoten` binary.
+    
+    ```bash
+    # Linux/macOS
+    tar -xzf ghoten_{{ .Version }}_linux_amd64.tar.gz
+    sudo mv ghoten /usr/local/bin/
+    
+    # Verify
+    ghoten version
+    ```
+    
+  # Release footer
+  footer: |
+    
+    ---
+    
+    **Full Changelog**: https://github.com/vmvarela/opentofu/compare/{{ .PreviousTag }}...{{ .Tag }}
+    
+    Based on OpenTofu. See [upstream releases](https://github.com/opentofu/opentofu/releases) for core changes.
+
+# No Docker builds
+# No Snap builds  
+# No package signing (simplified)
