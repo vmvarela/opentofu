@@ -5,11 +5,11 @@
 
 FROM alpine:3.20
 
-LABEL maintainer="OpenTofu Core Team <core@opentofu.org>"
+LABEL maintainer="Ghoten Fork"
 
 RUN apk add --no-cache git bash openssh
 
-COPY tofu /usr/local/bin/tofu
+COPY ghoten /usr/local/bin/ghoten
 
 ONBUILD RUN echo -e "\033[1;33mWARNING! PLEASE READ!\033[0m" >&2 \
             && echo -e "\033[1;33mPlease read carefully: you are using the OpenTofu image as a base image\033[0m" >&2 \
@@ -21,4 +21,4 @@ ONBUILD RUN echo -e "\033[1;33mWARNING! PLEASE READ!\033[0m" >&2 \
 
 ONBUILD RUN exit 1
 
-ENTRYPOINT ["/usr/local/bin/tofu"]
+ENTRYPOINT ["/usr/local/bin/ghoten"]

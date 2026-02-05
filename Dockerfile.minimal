@@ -5,8 +5,8 @@
 
 FROM scratch
 
-LABEL maintainer="OpenTofu Core Team <core@opentofu.org>"
+LABEL maintainer="Ghoten Fork"
 
-COPY tofu /usr/local/bin/tofu
+COPY ghoten /usr/local/bin/ghoten
 
-ENTRYPOINT ["/usr/local/bin/tofu"]
+ENTRYPOINT ["/usr/local/bin/ghoten"]
