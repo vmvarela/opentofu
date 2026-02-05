@@ -447,6 +447,23 @@ The -target and -exclude options are not for routine use, and are provided only 
 
 	diags = diags.Append(c.checkApplyGraph(ctx, plan, config))
 
+	// Report smart refresh statistics if applicable
+	if opts.RefreshMode == RefreshChanged && opts.RefreshTracker != nil {
+		total, refreshed, skipped := opts.RefreshTracker.Stats()
+		if total > 0 {
+			diags = diags.Append(tfdiags.Sourceless(
+				tfdiags.Warning,
+				"Smart refresh summary",
+				fmt.Sprintf(
+					"Using -refresh=changed mode: %d resources evaluated, %d refreshed, %d skipped. "+
+						"Resources were skipped because their configuration has not changed. "+
+						"Use -refresh=true to refresh all resources.",
+					total, refreshed, skipped,
+				),
+			))
+		}
+	}
+
 	return plan, diags
 }
 
