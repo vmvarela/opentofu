@@ -141,7 +141,18 @@ func (n *NodePlanDeposedResourceInstanceObject) Execute(ctx context.Context, eva
 	// at this point. The other nodes use separate types for plan and destroy,
 	// while deposed instances are always a destroy operation, so the logic
 	// here is a bit overloaded.
-	if !n.skipRefresh && op != walkPlanDestroy {
+	shouldRefresh := !n.skipRefresh && op != walkPlanDestroy
+
+	// Track that this deposed instance will be refreshed (for smart refresh statistics)
+	if n.refreshTracker != nil && shouldRefresh && n.refreshMode == RefreshChanged {
+		// Deposed instances should always be refreshed in smart refresh mode
+		// since they're pending destruction and we need current state
+		n.refreshTracker.MarkNeedsRefresh(n.Addr)
+		n.refreshTracker.RecordRefreshDecision(true)
+		log.Printf("[TRACE] NodeDeposedResourceInstanceObject: %s is deposed, will refresh", n.Addr)
+	}
+
+	if shouldRefresh {
 		// Refresh this object even though it is going to be destroyed, in
 		// case it's already been deleted outside OpenTofu. If this is a
 		// normal plan, providers expect a Read request to remove missing
