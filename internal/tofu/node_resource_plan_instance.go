@@ -386,6 +386,11 @@ func (n *NodePlannableResourceInstance) managedResourceExecute(ctx context.Conte
 				shouldRefresh = false
 			} else {
 				log.Printf("[TRACE] managedResourceExecute: %s configuration changed, will refresh", addr)
+				// Mark this resource as having direct configuration changes
+				// (not just upstream dependency changes) for change cone filtering
+				if n.refreshTracker != nil {
+					n.refreshTracker.MarkConfigChanged(addr.ContainingResource().Config())
+				}
 			}
 		}
 

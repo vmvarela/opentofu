@@ -71,10 +71,19 @@ type RefreshTracker struct {
 	// iterating the entire needsRefresh map with prefix matching.
 	configNeedsRefresh sync.Map // map[string]bool where key is ConfigResource.String()
 
+	// changedResources tracks config-level resources that have configuration changes
+	// (not just upstream dependency changes). This is used for change cone filtering.
+	changedResources sync.Map // map[string]bool where key is ConfigResource.String()
+
 	// totalResources counts total resources evaluated
 	totalResources atomic.Int64
 	// refreshedResources counts resources that were refreshed
 	refreshedResources atomic.Int64
+
+	// changeConeTotal tracks the total number of graph vertices before cone filtering
+	changeConeTotal atomic.Int64
+	// changeConeKept tracks the number of graph vertices kept after cone filtering
+	changeConeKept atomic.Int64
 }
 
 // NewRefreshTracker creates a new RefreshTracker instance.
@@ -123,6 +132,48 @@ func (t *RefreshTracker) Stats() (total, refreshed, skipped int64) {
 	refreshed = t.refreshedResources.Load()
 	skipped = total - refreshed
 	return total, refreshed, skipped
+}
+
+// RecordChangeConeStats records the graph filtering stats from the change cone.
+func (t *RefreshTracker) RecordChangeConeStats(total, kept int64) {
+	t.changeConeTotal.Store(total)
+	t.changeConeKept.Store(kept)
+}
+
+// ChangeConeStats returns the change cone filtering statistics.
+// Returns (total, kept, removed) where total is the number of vertices before
+// filtering, kept is vertices retained, and removed is vertices pruned.
+func (t *RefreshTracker) ChangeConeStats() (total, kept, removed int64) {
+	total = t.changeConeTotal.Load()
+	kept = t.changeConeKept.Load()
+	removed = total - kept
+	return total, kept, removed
+}
+
+// MarkConfigChanged marks a config resource as having configuration changes.
+// This is different from MarkNeedsRefresh, which can be triggered by upstream
+// changes. This method specifically tracks resources with direct config changes.
+func (t *RefreshTracker) MarkConfigChanged(addr addrs.ConfigResource) {
+	t.changedResources.Store(addr.String(), true)
+}
+
+// GetChangedResources returns all config resources that have been marked as
+// having configuration changes. This is used for change cone filtering.
+func (t *RefreshTracker) GetChangedResources() []addrs.ConfigResource {
+	var resources []addrs.ConfigResource
+	t.changedResources.Range(func(key, value interface{}) bool {
+		addrStr := key.(string)
+		// Parse the address back from string
+		// We need to be careful here - config resources can be in different modules
+		addr, diags := addrs.ParseAbsResourceStr(addrStr)
+		if diags.HasErrors() {
+			log.Printf("[WARN] ChangeCone: failed to parse stored resource address %q: %s", addrStr, diags.Err())
+			return true
+		}
+		resources = append(resources, addr.Config())
+		return true
+	})
+	return resources
 }
 
 // PlanOpts are the various options that affect the details of how OpenTofu
@@ -441,17 +492,29 @@ The -target and -exclude options are not for routine use, and are provided only 
 	if opts.RefreshMode == RefreshChanged && opts.RefreshTracker != nil {
 		total, refreshed, skipped := opts.RefreshTracker.Stats()
 		if total > 0 {
+			detail := fmt.Sprintf(
+				"You are creating a plan with the -refresh=changed option, which means that "+
+					"OpenTofu only refreshed resources whose configuration has changed or whose "+
+					"dependencies were refreshed.\n\n"+
+					"Of %d resources evaluated, %d were refreshed and %d were skipped.",
+				total, refreshed, skipped,
+			)
+
+			// Append change cone stats if the graph was filtered
+			coneTotal, coneKept, coneRemoved := opts.RefreshTracker.ChangeConeStats()
+			if coneRemoved > 0 {
+				detail += fmt.Sprintf(
+					"\nThe change cone filter reduced the plan graph from %d to %d nodes (%d pruned).",
+					coneTotal, coneKept, coneRemoved,
+				)
+			}
+
+			detail += "\nUse -refresh=true to refresh all resources and detect external changes."
+
 			diags = diags.Append(tfdiags.Sourceless(
 				tfdiags.Warning,
 				"Selective refresh is in effect",
-				fmt.Sprintf(
-					"You are creating a plan with the -refresh=changed option, which means that "+
-						"OpenTofu only refreshed resources whose configuration has changed or whose "+
-						"dependencies were refreshed.\n\n"+
-						"Of %d resources evaluated, %d were refreshed and %d were skipped. "+
-						"Use -refresh=true to refresh all resources and detect external changes.",
-					total, refreshed, skipped,
-				),
+				detail,
 			))
 		}
 	}
