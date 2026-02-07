@@ -286,16 +286,16 @@ func TestContext2Plan_smartRefresh_unchangedResource(t *testing.T) {
 		t.Fatalf("unexpected errors: %s", diags.Err())
 	}
 
-	// Check that the plan includes a warning about smart refresh
-	hasSmartRefreshWarning := false
+	// Check that the plan includes a warning about selective refresh
+	hasSelectiveRefreshWarning := false
 	for _, d := range diags {
-		if d.Severity() == 1 && strings.Contains(d.Description().Summary, "Smart refresh") {
-			hasSmartRefreshWarning = true
+		if d.Severity() == 1 && strings.Contains(d.Description().Summary, "Selective refresh") {
+			hasSelectiveRefreshWarning = true
 			break
 		}
 	}
-	if !hasSmartRefreshWarning {
-		t.Log("Note: smart refresh warning may not appear if no resources were evaluated")
+	if !hasSelectiveRefreshWarning {
+		t.Log("Note: selective refresh warning may not appear if no resources were evaluated")
 	}
 
 	// The plan should be empty (no changes) for an empty module
@@ -1094,26 +1094,26 @@ resource "test_instance" "changed" {
 		t.Fatalf("unexpected errors: %s", diags.Err())
 	}
 
-	// Look for the smart refresh summary diagnostic
+	// Look for the selective refresh diagnostic
 	found := false
 	for _, d := range diags {
-		if strings.Contains(d.Description().Summary, "Smart refresh") {
+		if strings.Contains(d.Description().Summary, "Selective refresh") {
 			detail := d.Description().Detail
 			if !strings.Contains(detail, "2 resources evaluated") {
 				t.Errorf("expected '2 resources evaluated' in detail, got: %s", detail)
 			}
-			if !strings.Contains(detail, "1 refreshed") {
-				t.Errorf("expected '1 refreshed' in detail, got: %s", detail)
+			if !strings.Contains(detail, "1 were refreshed") {
+				t.Errorf("expected '1 were refreshed' in detail, got: %s", detail)
 			}
-			if !strings.Contains(detail, "1 skipped") {
-				t.Errorf("expected '1 skipped' in detail, got: %s", detail)
+			if !strings.Contains(detail, "1 were skipped") {
+				t.Errorf("expected '1 were skipped' in detail, got: %s", detail)
 			}
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected 'Smart refresh summary' diagnostic but it was not emitted")
+		t.Error("expected 'Selective refresh is in effect' diagnostic but it was not emitted")
 	}
 }
 
