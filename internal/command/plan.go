@@ -167,7 +167,8 @@ func (c *PlanCommand) OperationRequest(
 	opReq.ConfigDir = "."
 	opReq.PlanMode = args.PlanMode
 	opReq.Hooks = view.Hooks()
-	opReq.PlanRefresh = args.Refresh
+	opReq.PlanRefresh = args.Refresh.RefreshEnabled()
+	opReq.PlanRefreshMode = args.Refresh.Mode
 	opReq.PlanOutPath = planOutPath
 	opReq.GenerateConfigOut = generateConfigOut
 	opReq.Targets = args.Targets
@@ -229,11 +230,21 @@ Plan Customization Options:
                           most recent OpenTofu apply but does not propose any
                           actions to undo any changes made outside of OpenTofu.
 
+  -refresh=true           Check for external changes to remote objects while
+                          creating the plan. This is the default behavior.
+
   -refresh=false          Skip checking for external changes to remote objects
                           while creating the plan. This can potentially make
                           planning faster, but at the expense of possibly
                           planning against a stale record of the remote system
                           state.
+
+  -refresh=changed        Only refresh resources whose configuration has changed
+                          or that have upstream dependencies which changed. This
+                          can significantly speed up planning for large
+                          configurations where only a few resources have been
+                          modified. Resources not refreshed will use their
+                          existing state.
 
   -replace=resource       Force replacement of a particular resource instance
                           using its resource address. If the plan would've
