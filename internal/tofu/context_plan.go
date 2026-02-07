@@ -443,11 +443,13 @@ The -target and -exclude options are not for routine use, and are provided only 
 		if total > 0 {
 			diags = diags.Append(tfdiags.Sourceless(
 				tfdiags.Warning,
-				"Smart refresh summary",
+				"Selective refresh is in effect",
 				fmt.Sprintf(
-					"Using -refresh=changed mode: %d resources evaluated, %d refreshed, %d skipped. "+
-						"Resources were skipped because their configuration has not changed. "+
-						"Use -refresh=true to refresh all resources.",
+					"You are creating a plan with the -refresh=changed option, which means that "+
+						"OpenTofu only refreshed resources whose configuration has changed or whose "+
+						"dependencies were refreshed.\n\n"+
+						"Of %d resources evaluated, %d were refreshed and %d were skipped. "+
+						"Use -refresh=true to refresh all resources and detect external changes.",
 					total, refreshed, skipped,
 				),
 			))
