@@ -13,7 +13,6 @@ import (
 	"github.com/zclconf/go-cty/cty"
 
 	"github.com/opentofu/opentofu/internal/addrs"
-	"github.com/opentofu/opentofu/internal/engine/internal/exec"
 	"github.com/opentofu/opentofu/internal/engine/internal/execgraph"
 	"github.com/opentofu/opentofu/internal/lang/eval"
 	"github.com/opentofu/opentofu/internal/plans"
@@ -23,10 +22,7 @@ import (
 	"github.com/opentofu/opentofu/internal/tfdiags"
 )
 
-func (p *planGlue) planDesiredManagedResourceInstance(ctx context.Context, inst *eval.DesiredResourceInstance, egb *execgraph.Builder) (plannedVal cty.Value, applyResultRef execgraph.ResourceInstanceResultRef, diags tfdiags.Diagnostics) {
-	// Regardless of outcome we'll always report that we completed planning.
-	defer p.planCtx.reportResourceInstancePlanCompletion(inst.Addr)
-
+func (p *planGlue) planDesiredManagedResourceInstance(ctx context.Context, inst *eval.DesiredResourceInstance, egb *execGraphBuilder) (plannedVal cty.Value, applyResultRef execgraph.ResourceInstanceResultRef, diags tfdiags.Diagnostics) {
 	// There are various reasons why we might need to defer final planning
 	// of this to a later round. The following is not exhaustive but is a
 	// placeholder to show where deferral might fit in.
@@ -248,59 +244,49 @@ func (p *planGlue) planDesiredManagedResourceInstance(ctx context.Context, inst 
 	}
 	p.planCtx.plannedChanges.AppendResourceInstanceChange(plannedChangeSrc)
 
-	// We need to explicitly model our dependency on any upstream resource
-	// instances in the resource instance graph. These don't naturally emerge
-	// from the data flow because these results are intermediated through the
-	// evaluator, which indirectly incorporates the results into the
-	// desiredInstRef result we'll build below.
-	dependencyResults := make([]execgraph.AnyResultRef, 0, len(inst.RequiredResourceInstances))
-	for _, depInstAddr := range inst.RequiredResourceInstances {
-		depInstResult := egb.ResourceInstanceFinalStateResult(depInstAddr)
-		dependencyResults = append(dependencyResults, depInstResult)
-	}
-	dependencyWaiter := egb.Waiter(dependencyResults...)
-
-	// The following is a placeholder for execgraph construction, which isn't
-	// fully wired in yet but is here just to help us understand whether we
-	// have enough graph builder and execgraph functionality for this to switch
-	// to using execution graphs more completely in later work.
+	// FIXME: This is a very naive execgraph-building function that was adapted
+	// from placeholder code that was originally just written inline here. It's
+	// only capable of dealing with very simple "create" plans. We'll think
+	// more about what shape this ought to have in future work.
 	//
-	// FIXME: If this is one of the "replace" actions then we need to generate
-	// a more complex graph that has two pairs of "final plan" and "apply".
-	providerClientRef, closeProviderAfter := egb.ProviderInstance(*inst.ProviderInstance, egb.Waiter())
-	instAddrRef := egb.ConstantResourceInstAddr(inst.Addr)
-	priorStateRef := egb.ResourceInstancePrior(instAddrRef)
-	plannedValRef := egb.ConstantValue(planResp.PlannedState)
-	desiredInstRef := egb.ResourceInstanceDesired(instAddrRef, dependencyWaiter)
-	finalPlanRef := egb.ManagedFinalPlan(
-		desiredInstRef,
-		priorStateRef,
-		plannedValRef,
-		providerClientRef,
-	)
-	finalResultRef := egb.ManagedApply(
-		finalPlanRef,
-		execgraph.NilResultRef[*exec.ResourceInstanceObject](),
-		providerClientRef,
-	)
-	closeProviderAfter(finalResultRef)
+	// However, this _is_ representing the general intended separation of
+	// concerns for resource instance planning: the [planGlue] methods like
+	// this one deal with all of the fallible side-effects like asking a
+	// provider questions and validating that the desired state even makes
+	// sense, and then methods of execGraphBuilder encapsulate the infaillible
+	// work of translating that high-level result into a bunch of execution
+	// graph operations only after we've determined that the input was valid
+	// and reasonable. In particular, these subgraph-building methods should
+	// be easily unit-testable due to not depending on anything other than
+	// their input.
+	finalResultRef := p.managedResourceInstanceExecSubgraph(ctx, inst, planResp.PlannedState, egb)
 
 	// Our result value for ongoing downstream planning is the planned new state.
 	return planResp.PlannedState, finalResultRef, diags
 }
 
-func (p *planGlue) planOrphanManagedResourceInstance(ctx context.Context, addr addrs.AbsResourceInstance, state *states.ResourceInstanceObjectFullSrc, egb *execgraph.Builder) tfdiags.Diagnostics {
-	// Regardless of outcome we'll always report that we completed planning.
-	defer p.planCtx.reportResourceInstancePlanCompletion(addr)
-
+func (p *planGlue) planOrphanManagedResourceInstance(ctx context.Context, addr addrs.AbsResourceInstance, state *states.ResourceInstanceObjectFullSrc, egb *execGraphBuilder) tfdiags.Diagnostics {
 	// TODO: Implement
 	panic("unimplemented")
 }
 
-func (p *planGlue) planDeposedManagedResourceInstanceObject(ctx context.Context, addr addrs.AbsResourceInstance, deposedKey states.DeposedKey, state *states.ResourceInstanceObjectFullSrc, egb *execgraph.Builder) tfdiags.Diagnostics {
-	// Regardless of outcome we'll always report that we completed planning.
-	defer p.planCtx.reportResourceInstanceDeposedPlanCompletion(addr, deposedKey)
-
+func (p *planGlue) planDeposedManagedResourceInstanceObject(ctx context.Context, addr addrs.AbsResourceInstance, deposedKey states.DeposedKey, state *states.ResourceInstanceObjectFullSrc, egb *execGraphBuilder) tfdiags.Diagnostics {
 	// TODO: Implement
 	panic("unimplemented")
+}
+
+// managedResourceInstanceExecSubgraph prepares what's needed to include
+// changes for a managed resource instance in an execution graph and then
+// adds the relevant nodes, returning a result reference referring to the
+// final result of the apply steps.
+//
+// This is a small wrapper around [execGraphBuilder.ManagedResourceInstanceSubgraph]
+// which implicitly adds execgraph items needed for the resource instance's
+// provider instance, which requires some information that an [execGraphBuilder]
+// instance cannot access directly itself.
+func (p *planGlue) managedResourceInstanceExecSubgraph(ctx context.Context, inst *eval.DesiredResourceInstance, plannedValue cty.Value, egb *execGraphBuilder) execgraph.ResourceInstanceResultRef {
+	providerClientRef, registerProviderCloseBlocker := p.ensureProviderInstanceExecgraph(ctx, inst.ProviderInstance, egb)
+	finalResultRef := egb.ManagedResourceInstanceSubgraph(inst, plannedValue, providerClientRef)
+	registerProviderCloseBlocker(finalResultRef)
+	return finalResultRef
 }
