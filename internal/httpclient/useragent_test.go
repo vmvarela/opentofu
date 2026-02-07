@@ -49,7 +49,7 @@ func TestUserAgentString_env(t *testing.T) {
 }
 
 func TestUserAgentAppendViaEnvVar(t *testing.T) {
-	expectedBase := "OpenTofu/0.0.0"
+	expectedBase := "Ghoten/0.0.0"
 
 	testCases := []struct {
 		envVarValue string
@@ -103,10 +103,10 @@ func TestCustomUserAgentAndAppendViaEnvVar(t *testing.T) {
 		appendUaValue string
 		expected      string
 	}{
-		{"", "", "OpenTofu/0.0.0"},
-		{"", " ", "OpenTofu/0.0.0"},
-		{"", " \n", "OpenTofu/0.0.0"},
-		{"", "testy test", "OpenTofu/0.0.0 testy test"},
+		{"", "", "Ghoten/0.0.0"},
+		{"", " ", "Ghoten/0.0.0"},
+		{"", " \n", "Ghoten/0.0.0"},
+		{"", "testy test", "Ghoten/0.0.0 testy test"},
 		{"opensource", "opentofu", "opensource opentofu"},
 	}
 

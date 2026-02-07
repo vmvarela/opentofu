@@ -1,0 +1,144 @@
+name: 'Setup Ghoten'
+description: 'Sets up Ghoten CLI (OpenTofu fork with ORAS/OCI backend) in your GitHub Actions workflow'
+author: 'vmvarela'
+
+branding:
+  icon: 'terminal'
+  color: 'purple'
+
+inputs:
+  ghoten_version:
+    description: 'Version to install. Defaults to the tag version (e.g., @v26.2.0 → 26.2.0)'
+    required: false
+    default: ''
+  github_token:
+    description: 'GitHub token for API requests (to avoid rate limiting)'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: 'The installed version of Ghoten'
+    value: ${{ steps.install.outputs.version }}
+  cache-hit:
+    description: 'Whether the binary was restored from cache'
+    value: ${{ steps.install.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Determine Version
+      id: version
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.ghoten_version }}
+        ACTION_REF: ${{ github.action_ref }}
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        if [ -n "$INPUT_VERSION" ]; then
+          VERSION="$INPUT_VERSION"
+        elif [[ "$ACTION_REF" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+          VERSION="${BASH_REMATCH[1]}"
+        else
+          # Fallback: fetch latest release
+          VERSION=$(curl -sL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/vmvarela/opentofu/releases/latest" \
+            | jq -r '.tag_name' | sed 's/^v//')
+        fi
+        
+        if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+          echo "::error::Could not determine Ghoten version"
+          exit 1
+        fi
+        
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Detect Platform
+      id: platform
+      shell: bash
+      run: |
+        case "${{ runner.os }}" in
+          Linux)   echo "os=linux" >> $GITHUB_OUTPUT ;;
+          macOS)   echo "os=darwin" >> $GITHUB_OUTPUT ;;
+          Windows) echo "os=windows" >> $GITHUB_OUTPUT ;;
+          *)       echo "::error::Unsupported OS: ${{ runner.os }}"; exit 1 ;;
+        esac
+        
+        case "${{ runner.arch }}" in
+          X64)   echo "arch=amd64" >> $GITHUB_OUTPUT ;;
+          ARM64) echo "arch=arm64" >> $GITHUB_OUTPUT ;;
+          *)     echo "::error::Unsupported architecture: ${{ runner.arch }}"; exit 1 ;;
+        esac
+
+    - name: Install Ghoten
+      id: install
+      shell: bash
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        OS: ${{ steps.platform.outputs.os }}
+        ARCH: ${{ steps.platform.outputs.arch }}
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        # Cache directory (same structure as @actions/tool-cache)
+        CACHE_DIR="${RUNNER_TOOL_CACHE}/ghoten/${VERSION}/${ARCH}"
+        GHOTEN_BIN="${CACHE_DIR}/ghoten"
+        [ "$OS" = "windows" ] && GHOTEN_BIN="${CACHE_DIR}/ghoten.exe"
+        
+        # Check cache
+        if [ -x "$GHOTEN_BIN" ]; then
+          echo "✅ Cache hit: ghoten v${VERSION}"
+          echo "cache-hit=true" >> $GITHUB_OUTPUT
+        else
+          echo "⬇️ Cache miss: downloading ghoten v${VERSION}"
+          echo "cache-hit=false" >> $GITHUB_OUTPUT
+          
+          # Determine extension
+          EXT="tar.gz"
+          [ "$OS" = "windows" ] && EXT="zip"
+          
+          # Download URL
+          FILENAME="ghoten_${VERSION}_${OS}_${ARCH}.${EXT}"
+          URL="https://github.com/vmvarela/opentofu/releases/download/v${VERSION}/${FILENAME}"
+          
+          # Create cache directory and download
+          mkdir -p "$CACHE_DIR"
+          cd "$CACHE_DIR"
+          
+          echo "📦 Downloading: $URL"
+          curl -sLO "$URL"
+          
+          # Verify download
+          if [ ! -f "$FILENAME" ]; then
+            echo "::error::Failed to download $URL"
+            exit 1
+          fi
+          
+          # Extract
+          if [ "$EXT" = "zip" ]; then
+            unzip -q "$FILENAME"
+          else
+            tar -xzf "$FILENAME"
+          fi
+          
+          # Cleanup archive
+          rm -f "$FILENAME"
+          
+          # Make executable (non-Windows)
+          [ "$OS" != "windows" ] && chmod +x ghoten
+          
+          echo "✅ Installed ghoten v${VERSION}"
+        fi
+        
+        # Add to PATH
+        echo "$CACHE_DIR" >> $GITHUB_PATH
+        
+        # Output version
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Verify Installation
+      shell: bash
+      run: |
+        echo "🔍 Verifying installation..."
+        ghoten version

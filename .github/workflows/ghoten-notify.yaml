@@ -1,0 +1,184 @@
+# Ghoten Weekly Status Notification
+# Sends a weekly summary of the fork status via GitHub Issues/Discussions.
+# Uses native GitHub notifications - users watching the repo will be notified.
+
+name: ghoten-notify
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 9AM UTC
+  workflow_dispatch:
+
+jobs:
+  weekly-status:
+    name: Weekly Status Report
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/opentofu/opentofu.git || true
+          git fetch upstream main --tags
+
+      - name: Gather statistics
+        id: stats
+        run: |
+          # Commits behind upstream
+          COMMITS_BEHIND=$(git rev-list --count origin/main..upstream/main 2>/dev/null || echo "0")
+          echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
+          
+          # Latest upstream tag
+          LATEST_UPSTREAM_TAG=$(git describe --tags --abbrev=0 upstream/main 2>/dev/null || echo "unknown")
+          echo "latest_upstream_tag=$LATEST_UPSTREAM_TAG" >> $GITHUB_OUTPUT
+          
+          # Latest ghoten tag
+          LATEST_GHOTEN_TAG=$(git tag -l 'v[0-9][0-9].*' --sort=-v:refname | head -1 || echo "none")
+          echo "latest_ghoten_tag=$LATEST_GHOTEN_TAG" >> $GITHUB_OUTPUT
+          
+          # Days since last ghoten release
+          if [ "$LATEST_GHOTEN_TAG" != "none" ]; then
+            LAST_RELEASE_DATE=$(git log -1 --format=%ci "$LATEST_GHOTEN_TAG" 2>/dev/null | cut -d' ' -f1)
+            DAYS_SINCE=$(( ($(date +%s) - $(date -d "$LAST_RELEASE_DATE" +%s 2>/dev/null || echo $(date +%s))) / 86400 ))
+            echo "days_since_release=$DAYS_SINCE" >> $GITHUB_OUTPUT
+          else
+            echo "days_since_release=N/A" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check feature branch existence
+          git fetch origin backend/oci feature/smart-refresh ghoten/branding 2>/dev/null || true
+          
+          OCI_EXISTS=$(git rev-parse --verify origin/backend/oci >/dev/null 2>&1 && echo "true" || echo "false")
+          SMART_REFRESH_EXISTS=$(git rev-parse --verify origin/feature/smart-refresh >/dev/null 2>&1 && echo "true" || echo "false")
+          BRANDING_EXISTS=$(git rev-parse --verify origin/ghoten/branding >/dev/null 2>&1 && echo "true" || echo "false")
+          
+          echo "oci_exists=$OCI_EXISTS" >> $GITHUB_OUTPUT
+          echo "smart_refresh_exists=$SMART_REFRESH_EXISTS" >> $GITHUB_OUTPUT
+          echo "branding_exists=$BRANDING_EXISTS" >> $GITHUB_OUTPUT
+
+      - name: Check for new upstream release
+        id: new_release
+        run: |
+          LATEST_TAG="${{ steps.stats.outputs.latest_upstream_tag }}"
+          
+          # Check if we've notified about this tag before (via issue label)
+          # If the tag is newer than our last ghoten release, flag it
+          GHOTEN_TAG="${{ steps.stats.outputs.latest_ghoten_tag }}"
+          
+          if [ "$GHOTEN_TAG" = "none" ]; then
+            echo "is_new=true" >> $GITHUB_OUTPUT
+          else
+            # Compare versions (simplified - assumes semver format)
+            echo "is_new=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      - name: Create weekly status issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const today = new Date().toISOString().split('T')[0];
+            const title = `📊 Ghoten Weekly Status - ${today}`;
+            
+            const commitsBehind = '${{ steps.stats.outputs.commits_behind }}';
+            const latestUpstream = '${{ steps.stats.outputs.latest_upstream_tag }}';
+            const latestGhoten = '${{ steps.stats.outputs.latest_ghoten_tag }}';
+            const daysSinceRelease = '${{ steps.stats.outputs.days_since_release }}';
+            
+            const ociExists = '${{ steps.stats.outputs.oci_exists }}' === 'true';
+            const smartRefreshExists = '${{ steps.stats.outputs.smart_refresh_exists }}' === 'true';
+            const brandingExists = '${{ steps.stats.outputs.branding_exists }}' === 'true';
+            
+            const syncStatus = commitsBehind === '0' ? '✅ Up to date' : `⚠️ ${commitsBehind} commits behind`;
+            
+            const body = `## Weekly Fork Status Report
+
+            ### 🔄 Sync Status
+            **Main branch:** ${syncStatus}
+            
+            ### 📦 Releases
+            | Type | Version |
+            |------|---------|
+            | Latest Upstream | \`${latestUpstream}\` |
+            | Latest Ghoten | \`${latestGhoten}\` |
+            | Days since Ghoten release | ${daysSinceRelease} |
+            
+            ### 🌿 Feature Branches
+            | Branch | Status |
+            |--------|--------|
+            | \`backend/oci\` | ${ociExists ? '✅ Exists' : '❌ Missing'} |
+            | \`feature/smart-refresh\` | ${smartRefreshExists ? '✅ Exists' : '❌ Missing'} |
+            | \`ghoten/branding\` | ${brandingExists ? '✅ Exists' : '❌ Missing'} |
+            
+            ### 📋 Actions
+            ${parseInt(commitsBehind) > 0 ? '- [ ] Sync main with upstream' : ''}
+            ${parseInt(daysSinceRelease) > 30 || daysSinceRelease === 'N/A' ? '- [ ] Consider creating a new release' : ''}
+            
+            ---
+            *This is an automated weekly status report. Close this issue when reviewed.*
+            `;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['weekly-status', 'ghoten']
+            });
+
+      - name: Alert on new upstream release
+        if: steps.new_release.outputs.is_new == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ steps.new_release.outputs.tag }}';
+            const title = `🆕 New upstream release: ${tag}`;
+            const body = `A new OpenTofu release has been published: **${tag}**
+            
+            Consider creating a new Ghoten release that includes this version.
+            
+            **Steps:**
+            1. Wait for daily sync to update main
+            2. Run integration tests
+            3. If passing, create new release via Actions → ghoten-release
+            
+            [View upstream release](https://github.com/opentofu/opentofu/releases/tag/${tag})
+            `;
+            
+            // Check if we already have an issue for this tag
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'new-upstream-release'
+            });
+            
+            const existingIssue = issues.data.find(i => i.title.includes(tag));
+            
+            if (!existingIssue) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['new-upstream-release', 'ghoten']
+              });
+            }
+
+      - name: Summary
+        run: |
+          echo "## 📊 Weekly Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Commits behind upstream: ${{ steps.stats.outputs.commits_behind }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Latest upstream: ${{ steps.stats.outputs.latest_upstream_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Latest Ghoten: ${{ steps.stats.outputs.latest_ghoten_tag }}" >> $GITHUB_STEP_SUMMARY

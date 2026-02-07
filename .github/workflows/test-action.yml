@@ -1,0 +1,39 @@
+name: Test Setup Ghoten Action
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'action.yml'
+
+jobs:
+  test-action:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Test with version from ref
+        id: setup-ref
+        uses: ./
+        with:
+          ghoten_version: '26.2.0'
+
+      - name: Verify version
+        run: |
+          echo "Installed version: ${{ steps.setup-ref.outputs.version }}"
+          echo "Cache hit: ${{ steps.setup-ref.outputs.cache-hit }}"
+          ghoten version
+
+      - name: Test cache hit (second run)
+        id: setup-cached
+        uses: ./
+        with:
+          ghoten_version: '26.2.0'
+
+      - name: Verify cache worked
+        run: |
+          echo "Cache hit: ${{ steps.setup-cached.outputs.cache-hit }}"

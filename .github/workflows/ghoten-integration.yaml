@@ -1,0 +1,263 @@
+# Ghoten Integration Test Workflow
+# Tests that all feature branches can be merged together successfully.
+# Runs after upstream sync, on feature branch changes, and manually.
+
+name: ghoten-integration
+
+on:
+  push:
+    branches:
+      - backend/oci
+      - feature/smart-refresh
+      - ghoten/branding
+  workflow_dispatch:
+
+env:
+  GO_VERSION: '1.22'
+
+jobs:
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      
+    steps:
+      - name: Checkout ghoten/branding
+        uses: actions/checkout@v4
+        with:
+          ref: ghoten/branding
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config rerere.enabled true
+          git config rerere.autoupdate true
+
+      - name: Setup rerere cache
+        run: |
+          mkdir -p .git/rr-cache
+          if [ -d ".rerere-cache" ] && [ "$(ls -A .rerere-cache 2>/dev/null)" ]; then
+            cp -r .rerere-cache/* .git/rr-cache/ || true
+          fi
+
+      - name: Fetch all branches
+        run: git fetch origin --prune
+
+      - name: Create test release branch
+        run: git checkout -B test/integration origin/main
+
+      - name: Test merge - ORAS/OCI backend
+        id: test_oci
+        continue-on-error: true
+        run: |
+          if git rev-parse --verify origin/backend/oci >/dev/null 2>&1; then
+            if git merge --squash origin/backend/oci; then
+              git commit -m "test: merge backend/oci"
+              echo "status=✅ Success" >> $GITHUB_OUTPUT
+            else
+              REMAINING=$(git rerere remaining 2>/dev/null || echo "conflict")
+              if [ -z "$REMAINING" ]; then
+                git add -A
+                git commit -m "test: merge backend/oci (auto-resolved)"
+                echo "status=✅ Auto-resolved" >> $GITHUB_OUTPUT
+              else
+                echo "status=❌ Conflict" >> $GITHUB_OUTPUT
+                echo "conflicts<<EOF" >> $GITHUB_OUTPUT
+                echo "$REMAINING" >> $GITHUB_OUTPUT
+                echo "EOF" >> $GITHUB_OUTPUT
+                git merge --abort || true
+              fi
+            fi
+          else
+            echo "status=⏭️ Branch not found" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Test merge - Smart Refresh
+        id: test_smart_refresh
+        continue-on-error: true
+        run: |
+          if git rev-parse --verify origin/feature/smart-refresh >/dev/null 2>&1; then
+            if git merge --squash origin/feature/smart-refresh; then
+              git commit -m "test: merge feature/smart-refresh"
+              echo "status=✅ Success" >> $GITHUB_OUTPUT
+            else
+              REMAINING=$(git rerere remaining 2>/dev/null || echo "conflict")
+              if [ -z "$REMAINING" ]; then
+                git add -A
+                git commit -m "test: merge feature/smart-refresh (auto-resolved)"
+                echo "status=✅ Auto-resolved" >> $GITHUB_OUTPUT
+              else
+                echo "status=❌ Conflict" >> $GITHUB_OUTPUT
+                echo "conflicts<<EOF" >> $GITHUB_OUTPUT
+                echo "$REMAINING" >> $GITHUB_OUTPUT
+                echo "EOF" >> $GITHUB_OUTPUT
+                git merge --abort || true
+              fi
+            fi
+          else
+            echo "status=⏭️ Branch not found" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Test merge - Branding
+        id: test_branding
+        continue-on-error: true
+        run: |
+          if git merge --squash origin/ghoten/branding; then
+            git commit -m "test: merge ghoten/branding" || echo "No changes"
+            echo "status=✅ Success" >> $GITHUB_OUTPUT
+          else
+            REMAINING=$(git rerere remaining 2>/dev/null || echo "conflict")
+            if [ -z "$REMAINING" ]; then
+              git add -A
+              git commit -m "test: merge ghoten/branding (auto-resolved)"
+              echo "status=✅ Auto-resolved" >> $GITHUB_OUTPUT
+            else
+              echo "status=❌ Conflict" >> $GITHUB_OUTPUT
+              echo "conflicts<<EOF" >> $GITHUB_OUTPUT
+              echo "$REMAINING" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+              git merge --abort || true
+            fi
+          fi
+
+      - name: Check overall merge status
+        id: overall
+        run: |
+          FAILED=false
+          if [[ "${{ steps.test_oci.outputs.status }}" == *"❌"* ]]; then FAILED=true; fi
+          if [[ "${{ steps.test_smart_refresh.outputs.status }}" == *"❌"* ]]; then FAILED=true; fi
+          if [[ "${{ steps.test_branding.outputs.status }}" == *"❌"* ]]; then FAILED=true; fi
+          
+          if [ "$FAILED" = "true" ]; then
+            echo "status=failed" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Go
+        if: steps.overall.outputs.status == 'success'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build test
+        if: steps.overall.outputs.status == 'success'
+        id: build
+        run: |
+          if go build ./...; then
+            echo "status=✅ Build passed" >> $GITHUB_OUTPUT
+          else
+            echo "status=❌ Build failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run tests
+        if: steps.overall.outputs.status == 'success' && steps.build.outputs.status == '✅ Build passed'
+        id: test
+        run: |
+          if go test -short ./...; then
+            echo "status=✅ Tests passed" >> $GITHUB_OUTPUT
+          else
+            echo "status=❌ Tests failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create issue on failure
+        if: steps.overall.outputs.status == 'failed' || steps.build.outputs.status == '❌ Build failed' || steps.test.outputs.status == '❌ Tests failed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '❌ Ghoten Integration Test Failed';
+            const body = `The integration test failed. Manual intervention may be required.
+            
+            ## Merge Status
+            | Branch | Status |
+            |--------|--------|
+            | backend/oci | ${{ steps.test_oci.outputs.status }} |
+            | feature/smart-refresh | ${{ steps.test_smart_refresh.outputs.status }} |
+            | ghoten/branding | ${{ steps.test_branding.outputs.status }} |
+            
+            ## Build & Test
+            - Build: ${{ steps.build.outputs.status || 'Not run' }}
+            - Tests: ${{ steps.test.outputs.status || 'Not run' }}
+            
+            ## Conflicts
+            ${{ steps.test_oci.outputs.conflicts || '' }}
+            ${{ steps.test_smart_refresh.outputs.conflicts || '' }}
+            ${{ steps.test_branding.outputs.conflicts || '' }}
+            
+            **Run \`./scripts/ghoten-resolve.sh\` locally to resolve conflicts.**
+            `;
+            
+            // Check if issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'integration-failure'
+            });
+            
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['integration-failure', 'ghoten']
+              });
+            } else {
+              // Update existing issue
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues.data[0].number,
+                body: body
+              });
+            }
+
+      - name: Close integration issue on success
+        if: steps.overall.outputs.status == 'success' && steps.build.outputs.status == '✅ Build passed' && steps.test.outputs.status == '✅ Tests passed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'integration-failure'
+            });
+            
+            for (const issue of issues.data) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed'
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: '✅ Integration test now passing. Closing automatically.'
+              });
+            }
+
+      - name: Summary
+        run: |
+          echo "## 🧪 Integration Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| backend/oci | ${{ steps.test_oci.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| feature/smart-refresh | ${{ steps.test_smart_refresh.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ghoten/branding | ${{ steps.test_branding.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ steps.build.outputs.status || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ steps.test.outputs.status || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if integration broken
+        if: steps.overall.outputs.status == 'failed' || steps.build.outputs.status == '❌ Build failed' || steps.test.outputs.status == '❌ Tests failed'
+        run: exit 1
