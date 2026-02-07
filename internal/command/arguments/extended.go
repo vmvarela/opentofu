@@ -61,10 +61,11 @@ func (r *RefreshFlagValue) Set(s string) error {
 	return nil
 }
 
-// IsBoolFlag returns false to indicate this flag accepts a value.
-// However, we handle the special case of -refresh without a value as true.
+// IsBoolFlag returns true so that bare -refresh (without a value) is treated
+// as -refresh=true by Go's flag package, preserving backward compatibility.
+// The extended values (like "changed") are still accepted via -refresh=changed.
 func (r *RefreshFlagValue) IsBoolFlag() bool {
-	return false
+	return true
 }
 
 // Get returns the value as an interface{}.
