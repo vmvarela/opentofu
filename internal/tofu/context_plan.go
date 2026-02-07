@@ -13,6 +13,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
@@ -30,6 +32,99 @@ import (
 	"github.com/opentofu/opentofu/internal/tracing/traceattrs"
 )
 
+// RefreshMode represents the different modes for refreshing resource state.
+type RefreshMode int
+
+const (
+	// RefreshAll refreshes all resources (default behavior).
+	RefreshAll RefreshMode = iota
+	// RefreshNone skips refresh for all resources (equivalent to -refresh=false).
+	RefreshNone
+	// RefreshChanged only refreshes resources with configuration changes
+	// and their upstream dependencies (smart refresh).
+	RefreshChanged
+)
+
+// String returns a human-readable name for the refresh mode.
+func (m RefreshMode) String() string {
+	switch m {
+	case RefreshAll:
+		return "all"
+	case RefreshNone:
+		return "none"
+	case RefreshChanged:
+		return "changed"
+	default:
+		return "unknown"
+	}
+}
+
+// RefreshTracker tracks which resources have been determined to need refresh
+// during the planning phase. It is thread-safe for concurrent access during
+// parallel graph walking.
+type RefreshTracker struct {
+	// needsRefresh tracks individual resource instances that need refresh.
+	needsRefresh sync.Map // map[string]bool where key is AbsResourceInstance.String()
+
+	// configNeedsRefresh tracks config-level resources (any instance changed).
+	// This enables O(1) lookups in CheckUpstreamNeedsRefresh instead of
+	// iterating the entire needsRefresh map with prefix matching.
+	configNeedsRefresh sync.Map // map[string]bool where key is ConfigResource.String()
+
+	// totalResources counts total resources evaluated
+	totalResources atomic.Int64
+	// refreshedResources counts resources that were refreshed
+	refreshedResources atomic.Int64
+}
+
+// NewRefreshTracker creates a new RefreshTracker instance.
+func NewRefreshTracker() *RefreshTracker {
+	return &RefreshTracker{}
+}
+
+// MarkNeedsRefresh marks a resource instance as needing refresh.
+// It also marks the containing config resource so that downstream
+// dependency checks via CheckUpstreamNeedsRefresh are O(1).
+func (t *RefreshTracker) MarkNeedsRefresh(addr addrs.AbsResourceInstance) {
+	t.needsRefresh.Store(addr.String(), true)
+	t.configNeedsRefresh.Store(addr.ContainingResource().Config().String(), true)
+}
+
+// NeedsRefresh checks if a specific resource instance has been marked as
+// needing refresh.
+func (t *RefreshTracker) NeedsRefresh(addr addrs.AbsResourceInstance) bool {
+	_, ok := t.needsRefresh.Load(addr.String())
+	return ok
+}
+
+// CheckUpstreamNeedsRefresh checks if any of the given upstream dependencies
+// have been marked as needing refresh. This uses the config-level index for
+// O(1) lookups per dependency, rather than iterating all tracked instances.
+func (t *RefreshTracker) CheckUpstreamNeedsRefresh(deps []addrs.ConfigResource) bool {
+	for _, dep := range deps {
+		if _, ok := t.configNeedsRefresh.Load(dep.String()); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// RecordRefreshDecision records whether a resource was refreshed or skipped.
+func (t *RefreshTracker) RecordRefreshDecision(refreshed bool) {
+	t.totalResources.Add(1)
+	if refreshed {
+		t.refreshedResources.Add(1)
+	}
+}
+
+// Stats returns the refresh statistics.
+func (t *RefreshTracker) Stats() (total, refreshed, skipped int64) {
+	total = t.totalResources.Load()
+	refreshed = t.refreshedResources.Load()
+	skipped = total - refreshed
+	return total, refreshed, skipped
+}
+
 // PlanOpts are the various options that affect the details of how OpenTofu
 // will build a plan.
 type PlanOpts struct {
@@ -42,7 +137,20 @@ type PlanOpts struct {
 	// resource instances in the prior state are accurate and to therefore
 	// disable the usual step of fetching updated values for each resource
 	// instance using its corresponding provider.
+	// Deprecated: Use RefreshMode instead. This field is kept for backward
+	// compatibility and will be removed in a future version.
 	SkipRefresh bool
+
+	// RefreshMode specifies how resources should be refreshed during planning.
+	// RefreshAll (default) refreshes all resources, RefreshNone skips all refresh,
+	// and RefreshChanged only refreshes resources with configuration changes
+	// and their upstream dependencies.
+	RefreshMode RefreshMode
+
+	// RefreshTracker is used when RefreshMode is RefreshChanged to track
+	// which resources need refresh based on configuration changes.
+	// This is populated automatically during planning.
+	RefreshTracker *RefreshTracker
 
 	// PreDestroyRefresh indicated that this is being passed to a plan used to
 	// refresh the state immediately before a destroy plan.
@@ -145,6 +253,16 @@ func (c *Context) Plan(ctx context.Context, config *configs.Config, prevRunState
 		}
 	}
 
+	// Normalize SkipRefresh to RefreshMode for backward compatibility
+	if opts.SkipRefresh && opts.RefreshMode == RefreshAll {
+		opts.RefreshMode = RefreshNone
+	}
+
+	// Initialize RefreshTracker for smart refresh mode
+	if opts.RefreshMode == RefreshChanged && opts.RefreshTracker == nil {
+		opts.RefreshTracker = NewRefreshTracker()
+	}
+
 	ctx, span := tracing.Tracer().Start(
 		ctx, "Plan phase",
 	)
@@ -173,13 +291,23 @@ func (c *Context) Plan(ctx context.Context, config *configs.Config, prevRunState
 	case plans.NormalMode, plans.DestroyMode:
 		// OK
 	case plans.RefreshOnlyMode:
-		if opts.SkipRefresh {
+		if opts.SkipRefresh || opts.RefreshMode == RefreshNone {
 			// The CLI layer (and other similar callers) should prevent this
 			// combination of options.
 			diags = diags.Append(tfdiags.Sourceless(
 				tfdiags.Error,
 				"Incompatible plan options",
 				"Cannot skip refreshing in refresh-only mode. This is a bug in OpenTofu.",
+			))
+			return nil, diags
+		}
+		if opts.RefreshMode == RefreshChanged {
+			// Smart refresh doesn't make sense in refresh-only mode since
+			// the whole point is to refresh everything.
+			diags = diags.Append(tfdiags.Sourceless(
+				tfdiags.Error,
+				"Incompatible plan options",
+				"Cannot use -refresh=changed in refresh-only mode. The refresh-only mode is designed to refresh all resources.",
 			))
 			return nil, diags
 		}
@@ -202,6 +330,17 @@ func (c *Context) Plan(ctx context.Context, config *configs.Config, prevRunState
 			"Forcing resource instance replacement (with -replace=...) is allowed only in normal planning mode.",
 		))
 		return nil, diags
+	}
+
+	// Warn about smart refresh with destroy mode - it may miss drift on resources
+	// being destroyed, which could cause issues during destruction.
+	if opts.RefreshMode == RefreshChanged && opts.Mode == plans.DestroyMode {
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Warning,
+			"Smart refresh with destroy mode",
+			"Using -refresh=changed with -destroy may miss external changes to resources being destroyed. "+
+				"Consider using -refresh=true for destroy operations to ensure accurate state.",
+		))
 	}
 
 	// By the time we get here, we should have values defined for all of
@@ -297,6 +436,25 @@ The -target and -exclude options are not for routine use, and are provided only 
 	}
 
 	diags = diags.Append(c.checkApplyGraph(ctx, plan, config))
+
+	// Report smart refresh statistics if applicable
+	if opts.RefreshMode == RefreshChanged && opts.RefreshTracker != nil {
+		total, refreshed, skipped := opts.RefreshTracker.Stats()
+		if total > 0 {
+			diags = diags.Append(tfdiags.Sourceless(
+				tfdiags.Warning,
+				"Selective refresh is in effect",
+				fmt.Sprintf(
+					"You are creating a plan with the -refresh=changed option, which means that "+
+						"OpenTofu only refreshed resources whose configuration has changed or whose "+
+						"dependencies were refreshed.\n\n"+
+						"Of %d resources evaluated, %d were refreshed and %d were skipped. "+
+						"Use -refresh=true to refresh all resources and detect external changes.",
+					total, refreshed, skipped,
+				),
+			))
+		}
+	}
 
 	return plan, diags
 }
@@ -435,6 +593,12 @@ func (c *Context) destroyPlan(ctx context.Context, config *configs.Config, prevR
 		refreshOpts := *opts
 		refreshOpts.Mode = plans.NormalMode
 		refreshOpts.PreDestroyRefresh = true
+
+		// Force full refresh for pre-destroy: the purpose of this refresh is
+		// to detect all drift before destroying, so smart refresh would be
+		// counter-productive here.
+		refreshOpts.RefreshMode = RefreshAll
+		refreshOpts.RefreshTracker = nil
 
 		// FIXME: A normal plan is required here to refresh the state, because
 		// the state and configuration may not match during a destroy, and a
@@ -880,7 +1044,9 @@ func (c *Context) planGraph(ctx context.Context, config *configs.Config, prevRun
 			Targets:                 opts.Targets,
 			Excludes:                opts.Excludes,
 			ForceReplace:            opts.ForceReplace,
-			skipRefresh:             opts.SkipRefresh,
+			skipRefresh:             opts.SkipRefresh || opts.RefreshMode == RefreshNone,
+			refreshMode:             opts.RefreshMode,
+			refreshTracker:          opts.RefreshTracker,
 			preDestroyRefresh:       opts.PreDestroyRefresh,
 			Operation:               walkPlan,
 			ExternalReferences:      opts.ExternalReferences,
@@ -898,7 +1064,9 @@ func (c *Context) planGraph(ctx context.Context, config *configs.Config, prevRun
 			Plugins:                 c.plugins,
 			Targets:                 opts.Targets,
 			Excludes:                opts.Excludes,
-			skipRefresh:             opts.SkipRefresh,
+			skipRefresh:             opts.SkipRefresh || opts.RefreshMode == RefreshNone,
+			refreshMode:             opts.RefreshMode,
+			refreshTracker:          opts.RefreshTracker,
 			skipPlanChanges:         true, // this activates "refresh only" mode.
 			Operation:               walkPlan,
 			ExternalReferences:      opts.ExternalReferences,
@@ -913,7 +1081,9 @@ func (c *Context) planGraph(ctx context.Context, config *configs.Config, prevRun
 			Plugins:                 c.plugins,
 			Targets:                 opts.Targets,
 			Excludes:                opts.Excludes,
-			skipRefresh:             opts.SkipRefresh,
+			skipRefresh:             opts.SkipRefresh || opts.RefreshMode == RefreshNone,
+			refreshMode:             opts.RefreshMode,
+			refreshTracker:          opts.RefreshTracker,
 			Operation:               walkPlanDestroy,
 			ProviderFunctionTracker: providerFunctionTracker,
 		}).Build(ctx, addrs.RootModuleInstance)
