@@ -594,6 +594,12 @@ func (c *Context) destroyPlan(ctx context.Context, config *configs.Config, prevR
 		refreshOpts.Mode = plans.NormalMode
 		refreshOpts.PreDestroyRefresh = true
 
+		// Force full refresh for pre-destroy: the purpose of this refresh is
+		// to detect all drift before destroying, so smart refresh would be
+		// counter-productive here.
+		refreshOpts.RefreshMode = RefreshAll
+		refreshOpts.RefreshTracker = nil
+
 		// FIXME: A normal plan is required here to refresh the state, because
 		// the state and configuration may not match during a destroy, and a
 		// normal refresh plan can fail with evaluation errors. In the future
