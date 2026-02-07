@@ -95,6 +95,87 @@ func TestRefreshTracker_CheckUpstreamNeedsRefresh(t *testing.T) {
 	}
 }
 
+// TestRefreshTracker_CheckUpstreamNeedsRefresh_indexedInstances tests that
+// marking an indexed instance (e.g. test_instance.foo[0]) correctly
+// propagates to config-level dependency checks for test_instance.foo.
+func TestRefreshTracker_CheckUpstreamNeedsRefresh_indexedInstances(t *testing.T) {
+	tracker := NewRefreshTracker()
+
+	// Mark a specific indexed instance
+	fooAddr0 := mustResourceInstanceAddr("test_instance.foo[0]")
+	tracker.MarkNeedsRefresh(fooAddr0)
+
+	// The config-level check should find it
+	fooConfigAddr := addrs.ConfigResource{
+		Resource: addrs.Resource{
+			Mode: addrs.ManagedResourceMode,
+			Type: "test_instance",
+			Name: "foo",
+		},
+	}
+	if !tracker.CheckUpstreamNeedsRefresh([]addrs.ConfigResource{fooConfigAddr}) {
+		t.Error("should detect indexed instance when checking config-level dependency")
+	}
+
+	// Individual instance checks should also work
+	if !tracker.NeedsRefresh(fooAddr0) {
+		t.Error("instance [0] should need refresh")
+	}
+	fooAddr1 := mustResourceInstanceAddr("test_instance.foo[1]")
+	if tracker.NeedsRefresh(fooAddr1) {
+		t.Error("instance [1] should not need refresh")
+	}
+
+	// A different resource's config address should not match
+	barConfigAddr := addrs.ConfigResource{
+		Resource: addrs.Resource{
+			Mode: addrs.ManagedResourceMode,
+			Type: "test_instance",
+			Name: "foobar",
+		},
+	}
+	if tracker.CheckUpstreamNeedsRefresh([]addrs.ConfigResource{barConfigAddr}) {
+		t.Error("test_instance.foobar should not match test_instance.foo")
+	}
+}
+
+// TestRefreshTracker_ConcurrentAccess tests that RefreshTracker is safe for
+// concurrent use, exercising the atomic counters and sync.Map operations.
+func TestRefreshTracker_ConcurrentAccess(t *testing.T) {
+	tracker := NewRefreshTracker()
+	const numGoroutines = 100
+
+	done := make(chan struct{})
+	for i := 0; i < numGoroutines; i++ {
+		go func(idx int) {
+			defer func() { done <- struct{}{} }()
+			addr := mustResourceInstanceAddr("test_instance.item[" + string(rune('0'+idx%10)) + "]")
+			tracker.MarkNeedsRefresh(addr)
+			tracker.RecordRefreshDecision(idx%2 == 0)
+			tracker.NeedsRefresh(addr)
+			tracker.CheckUpstreamNeedsRefresh([]addrs.ConfigResource{{
+				Resource: addrs.Resource{
+					Mode: addrs.ManagedResourceMode,
+					Type: "test_instance",
+					Name: "item",
+				},
+			}})
+		}(i)
+	}
+
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	total, refreshed, skipped := tracker.Stats()
+	if total != numGoroutines {
+		t.Errorf("expected total=%d, got %d", numGoroutines, total)
+	}
+	if refreshed+skipped != total {
+		t.Errorf("refreshed (%d) + skipped (%d) != total (%d)", refreshed, skipped, total)
+	}
+}
+
 // TestContext2Plan_smartRefresh_unchangedResource tests that unchanged resources are skipped
 func TestContext2Plan_smartRefresh_unchangedResource(t *testing.T) {
 	m := testModule(t, "plan-empty")

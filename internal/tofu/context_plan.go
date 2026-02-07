@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
@@ -62,16 +63,18 @@ func (m RefreshMode) String() string {
 // during the planning phase. It is thread-safe for concurrent access during
 // parallel graph walking.
 type RefreshTracker struct {
-	// needsRefresh tracks resources that have configuration changes or
-	// upstream dependencies with changes
+	// needsRefresh tracks individual resource instances that need refresh.
 	needsRefresh sync.Map // map[string]bool where key is AbsResourceInstance.String()
 
+	// configNeedsRefresh tracks config-level resources (any instance changed).
+	// This enables O(1) lookups in CheckUpstreamNeedsRefresh instead of
+	// iterating the entire needsRefresh map with prefix matching.
+	configNeedsRefresh sync.Map // map[string]bool where key is ConfigResource.String()
+
 	// totalResources counts total resources evaluated
-	totalResources int64
+	totalResources atomic.Int64
 	// refreshedResources counts resources that were refreshed
-	refreshedResources int64
-	// mu protects the counters
-	mu sync.Mutex
+	refreshedResources atomic.Int64
 }
 
 // NewRefreshTracker creates a new RefreshTracker instance.
@@ -80,38 +83,26 @@ func NewRefreshTracker() *RefreshTracker {
 }
 
 // MarkNeedsRefresh marks a resource instance as needing refresh.
+// It also marks the containing config resource so that downstream
+// dependency checks via CheckUpstreamNeedsRefresh are O(1).
 func (t *RefreshTracker) MarkNeedsRefresh(addr addrs.AbsResourceInstance) {
 	t.needsRefresh.Store(addr.String(), true)
+	t.configNeedsRefresh.Store(addr.ContainingResource().Config().String(), true)
 }
 
-// NeedsRefresh checks if a resource instance needs refresh.
+// NeedsRefresh checks if a specific resource instance has been marked as
+// needing refresh.
 func (t *RefreshTracker) NeedsRefresh(addr addrs.AbsResourceInstance) bool {
-	val, ok := t.needsRefresh.Load(addr.String())
-	if !ok {
-		return false
-	}
-	return val.(bool)
+	_, ok := t.needsRefresh.Load(addr.String())
+	return ok
 }
 
 // CheckUpstreamNeedsRefresh checks if any of the given upstream dependencies
-// have been marked as needing refresh.
+// have been marked as needing refresh. This uses the config-level index for
+// O(1) lookups per dependency, rather than iterating all tracked instances.
 func (t *RefreshTracker) CheckUpstreamNeedsRefresh(deps []addrs.ConfigResource) bool {
 	for _, dep := range deps {
-		// Check all possible instances of this resource
-		// Since we store by AbsResourceInstance, we need to check if any instance matches
-		found := false
-		t.needsRefresh.Range(func(key, value interface{}) bool {
-			keyStr := key.(string)
-			// Check if this key starts with the config resource address
-			if strings.HasPrefix(keyStr, dep.String()) {
-				if value.(bool) {
-					found = true
-					return false // stop iteration
-				}
-			}
-			return true // continue iteration
-		})
-		if found {
+		if _, ok := t.configNeedsRefresh.Load(dep.String()); ok {
 			return true
 		}
 	}
@@ -120,19 +111,18 @@ func (t *RefreshTracker) CheckUpstreamNeedsRefresh(deps []addrs.ConfigResource) 
 
 // RecordRefreshDecision records whether a resource was refreshed or skipped.
 func (t *RefreshTracker) RecordRefreshDecision(refreshed bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.totalResources++
+	t.totalResources.Add(1)
 	if refreshed {
-		t.refreshedResources++
+		t.refreshedResources.Add(1)
 	}
 }
 
 // Stats returns the refresh statistics.
 func (t *RefreshTracker) Stats() (total, refreshed, skipped int64) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.totalResources, t.refreshedResources, t.totalResources - t.refreshedResources
+	total = t.totalResources.Load()
+	refreshed = t.refreshedResources.Load()
+	skipped = total - refreshed
+	return total, refreshed, skipped
 }
 
 // PlanOpts are the various options that affect the details of how OpenTofu
