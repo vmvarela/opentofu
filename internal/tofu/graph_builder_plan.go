@@ -98,7 +98,7 @@ type PlanGraphBuilder struct {
 	// the state.
 	RemoveStatements []*refactoring.RemoveStatement
 
-	// GenerateConfig tells OpenTofu where to write and generated config for
+	// GenerateConfig tells Ghoten where to write and generated config for
 	// any import targets that do not already have configuration.
 	//
 	// If empty, then config will not be generated.
@@ -263,6 +263,16 @@ func (b *PlanGraphBuilder) Steps() []GraphTransformer {
 			Op: b.Operation,
 		},
 
+		// Change cone filtering for smart refresh mode
+		// This must come before TargetingTransformer so that manual targets take precedence
+		&ChangeConeTransformer{
+			Skip:           changeConeSkip(b),
+			SkipReason:     changeConeSkipReason(b),
+			RefreshTracker: b.refreshTracker,
+			Config:         b.Config,
+			State:          b.State,
+		},
+
 		// Target
 		&TargetingTransformer{Targets: b.Targets, Excludes: b.Excludes},
 
@@ -290,6 +300,31 @@ func (b *PlanGraphBuilder) Steps() []GraphTransformer {
 	}
 
 	return steps
+}
+
+// changeConeSkip returns true if the ChangeConeTransformer should be skipped.
+func changeConeSkip(b *PlanGraphBuilder) bool {
+	return b.Operation == walkValidate ||
+		b.refreshMode != RefreshChanged ||
+		len(b.Targets) > 0 ||
+		len(b.Excludes) > 0
+}
+
+// changeConeSkipReason returns a human-readable reason for why change cone
+// filtering was skipped, or empty string if it should not be skipped.
+func changeConeSkipReason(b *PlanGraphBuilder) string {
+	switch {
+	case b.Operation == walkValidate:
+		return "validate walk"
+	case b.refreshMode != RefreshChanged:
+		return "smart refresh not enabled"
+	case len(b.Targets) > 0:
+		return "manual -target specified"
+	case len(b.Excludes) > 0:
+		return "manual -exclude specified"
+	default:
+		return ""
+	}
 }
 
 func (b *PlanGraphBuilder) initPlan() {
