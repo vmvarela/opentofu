@@ -26,7 +26,7 @@ EXT := $(shell go env GOEXE)
 # or commit hash if there is no tag.
 .PHONY: build
 build:
-	go build -ldflags "-X main.version=$(shell git describe --tags --always --dirty)" -o tofu$(EXT) ./cmd/tofu
+	go build -ldflags "-X main.version=$(shell git describe --tags --always --dirty)" -o ghoten ./cmd/tofu
 
 # generate runs `go generate` to build the dynamically generated
 # source files, except the protobuf stubs which are built instead with

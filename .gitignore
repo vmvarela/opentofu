@@ -19,6 +19,7 @@ website/node_modules
 *.iml
 
 /tofu
+/ghoten
 
 website/vendor
 vendor/
