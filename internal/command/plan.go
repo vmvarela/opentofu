@@ -96,7 +96,7 @@ func (c *PlanCommand) Run(rawArgs []string) int {
 	}
 
 	// Build the operation request
-	opReq, opDiags := c.OperationRequest(ctx, be, view, args.ViewOptions, args.Operation, args.OutPath, args.GenerateConfigPath, enc)
+	opReq, opDiags := c.OperationRequest(ctx, be, view, args.ViewOptions, args.Operation, args.OutPath, args.GenerateConfigPath, enc, args.VelocityEnabled, args.VelocityStrategy)
 	diags = diags.Append(opDiags)
 	if diags.HasErrors() {
 		view.Diagnostics(diags)
@@ -160,6 +160,8 @@ func (c *PlanCommand) OperationRequest(
 	planOutPath string,
 	generateConfigOut string,
 	enc encryption.Encryption,
+	velocityEnabled bool,
+	velocityStrategy string,
 ) (*backend.Operation, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
@@ -176,6 +178,20 @@ func (c *PlanCommand) OperationRequest(
 	opReq.ForceReplace = args.ForceReplace
 	opReq.Type = backend.OperationTypePlan
 	opReq.View = view.Operation()
+
+	// Velocity optimization settings
+	opReq.VelocityEnabled = velocityEnabled
+	opReq.VelocityStaticInjection = true // Enable by default when velocity is enabled
+	switch velocityStrategy {
+	case "full":
+		opReq.VelocityStrategy = 0
+	case "targeted":
+		opReq.VelocityStrategy = 1
+	case "optimized":
+		opReq.VelocityStrategy = 2
+	default:
+		opReq.VelocityStrategy = 1 // Default to targeted
+	}
 
 	var err error
 	opReq.ConfigLoader, err = c.initConfigLoader()

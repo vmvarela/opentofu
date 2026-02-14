@@ -332,6 +332,18 @@ type Operation struct {
 	// for unmatched import targets and where any generated config should be
 	// written to.
 	GenerateConfigOut string
+
+	// VelocityEnabled enables velocity optimizations for refresh operations.
+	// When enabled, only resources in the dependency cone of changed resources
+	// will be refreshed, transforming O(n) to O(subgraph) operations.
+	VelocityEnabled bool
+
+	// VelocityStrategy determines how velocity calculates which resources to refresh.
+	// 0 = Full, 1 = Targeted, 2 = Optimized
+	VelocityStrategy int
+
+	// VelocityStaticInjection enables skipping refresh for unchanged dependencies.
+	VelocityStaticInjection bool
 }
 
 // HasConfig returns true if and only if the operation has a ConfigDir value

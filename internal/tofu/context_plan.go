@@ -28,6 +28,7 @@ import (
 	"github.com/opentofu/opentofu/internal/tfdiags"
 	"github.com/opentofu/opentofu/internal/tracing"
 	"github.com/opentofu/opentofu/internal/tracing/traceattrs"
+	"github.com/opentofu/opentofu/internal/velocity"
 )
 
 // PlanOpts are the various options that affect the details of how OpenTofu
@@ -109,6 +110,19 @@ type PlanOpts struct {
 	//
 	// If empty, then no config will be generated.
 	GenerateConfigPath string
+
+	// VelocityEnabled enables velocity optimizations for refresh operations.
+	// When enabled, only resources in the dependency cone of changed resources
+	// will be refreshed, transforming O(n) to O(subgraph) operations.
+	VelocityEnabled bool
+
+	// VelocityStrategy determines how velocity calculates which resources to refresh.
+	// Options: RefreshStrategyFull, RefreshStrategyTargeted, RefreshStrategyOptimized
+	VelocityStrategy int
+
+	// VelocityStaticInjection enables skipping refresh for unchanged dependencies
+	// by injecting their cached values from state instead.
+	VelocityStaticInjection bool
 }
 
 // Plan generates an execution plan by comparing the given configuration
@@ -343,6 +357,23 @@ func (c *Context) plan(ctx context.Context, config *configs.Config, prevRunState
 
 	if opts.Mode != plans.NormalMode {
 		panic(fmt.Sprintf("called Context.plan with %s", opts.Mode))
+	}
+
+	// Initialize velocity optimization if enabled
+	if opts.VelocityEnabled && !opts.SkipRefresh {
+		velocityHelper := velocity.NewPlanHelper(prevRunState, &velocity.PlanHelperOpts{
+			Enabled:               true,
+			Strategy:              velocity.RefreshStrategy(opts.VelocityStrategy),
+			EnableStaticInjection: opts.VelocityStaticInjection,
+		})
+		if velocityHelper != nil {
+			// Compute refresh scope based on targets
+			if err := velocityHelper.ComputeRefreshScope(ctx, opts.Targets, nil); err != nil {
+				log.Printf("[WARN] Velocity optimization failed, falling back to full refresh: %v", err)
+			} else {
+				velocityHelper.LogSummary()
+			}
+		}
 	}
 
 	opts.ImportTargets = c.findImportTargets(config)

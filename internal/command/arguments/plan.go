@@ -33,6 +33,13 @@ type Plan struct {
 
 	// ShowSensitive is used to display the value of variables marked as sensitive.
 	ShowSensitive bool
+
+	// VelocityEnabled enables velocity optimizations for refresh operations.
+	// When enabled, only resources in the dependency cone are refreshed.
+	VelocityEnabled bool
+
+	// VelocityStrategy determines refresh calculation: "full", "targeted", "optimized"
+	VelocityStrategy string
 }
 
 // ParsePlan processes CLI arguments, returning a Plan value, a closer function, and errors.
@@ -51,6 +58,8 @@ func ParsePlan(args []string) (*Plan, func(), tfdiags.Diagnostics) {
 	cmdFlags.StringVar(&plan.OutPath, "out", "", "out")
 	cmdFlags.StringVar(&plan.GenerateConfigPath, "generate-config-out", "", "generate-config-out")
 	cmdFlags.BoolVar(&plan.ShowSensitive, "show-sensitive", false, "displays sensitive values")
+	cmdFlags.BoolVar(&plan.VelocityEnabled, "velocity", false, "enable velocity refresh optimizations")
+	cmdFlags.StringVar(&plan.VelocityStrategy, "velocity-strategy", "targeted", "velocity strategy: full, targeted, optimized")
 
 	plan.ViewOptions.AddFlags(cmdFlags, true)
 

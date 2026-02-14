@@ -99,6 +99,18 @@ type PlanGraphBuilder struct {
 	GenerateConfigPath string
 
 	ProviderFunctionTracker ProviderFunctionMapping
+
+	// velocityRefreshFilter provides velocity-based refresh filtering.
+	// When set, individual resource nodes will consult this filter to
+	// determine if they should refresh or use cached values.
+	velocityRefreshFilter VelocityRefreshFilter
+}
+
+// VelocityRefreshFilter is an interface for velocity refresh filtering.
+// This allows the velocity package to be optional and avoids import cycles.
+type VelocityRefreshFilter interface {
+	ShouldRefreshInstance(addr addrs.AbsResourceInstance) bool
+	IsEnabled() bool
 }
 
 // See GraphBuilder
