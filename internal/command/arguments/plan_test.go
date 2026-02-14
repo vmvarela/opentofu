@@ -28,6 +28,7 @@ func TestParsePlan_basicValid(t *testing.T) {
 			nil,
 			&Plan{
 				DetailedExitCode: false,
+				VelocityStrategy: "targeted",
 				ViewOptions: ViewOptions{
 					InputEnabled: true,
 					ViewType:     ViewHuman,
@@ -46,6 +47,7 @@ func TestParsePlan_basicValid(t *testing.T) {
 			[]string{"-destroy", "-detailed-exitcode", "-input=false", "-out=saved.tfplan"},
 			&Plan{
 				DetailedExitCode: true,
+				VelocityStrategy: "targeted",
 				ViewOptions: ViewOptions{
 					InputEnabled: false,
 					ViewType:     ViewHuman,
@@ -64,6 +66,7 @@ func TestParsePlan_basicValid(t *testing.T) {
 			[]string{"-json"},
 			&Plan{
 				DetailedExitCode: false,
+				VelocityStrategy: "targeted",
 				ViewOptions: ViewOptions{
 					InputEnabled: false,
 					ViewType:     ViewJSON,
