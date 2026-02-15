@@ -401,6 +401,62 @@ The available options are:
   the warnings will be shown only for the modules that are imported with a relative
   path. When "module:none" is selected, all the deprecation warnings will be dropped.
 
+## Performance Options
+
+:::warning Experimental
+The velocity optimization feature is experimental and may change in future versions.
+:::
+
+OpenTofu provides performance optimization options to reduce the time spent on
+refresh operations, especially useful for large state files.
+
+* `-velocity` - Enable velocity optimization to reduce the number of provider
+  refresh operations. When used with `-target`, only resources in the dependency
+  cone of the targets will be refreshed. Without `-target`, velocity will
+  automatically detect resources that have configuration changes (new, removed,
+  or modified) and only refresh those and their dependencies. This transforms
+  O(n) refresh operations into O(subgraph).
+
+* `-velocity-strategy=STRATEGY` - Select the velocity optimization strategy:
+  * `full` - Refresh all resources (default behavior without `-velocity`)
+  * `targeted` - Refresh only resources in the dependency cone of changed
+    resources (default when `-velocity` is set)
+  * `optimized` - Use static injection for upstream dependencies that haven't
+    changed, minimizing API calls to cloud providers
+
+### How Velocity Optimization Works
+
+When you run `tofu plan -velocity`, OpenTofu:
+
+1. Builds a dependency graph (DAG) from the state file
+2. Identifies changed resources:
+   - If `-target` is specified: uses those targets as the starting point
+   - Otherwise: compares configuration with state to detect new, removed,
+     or structurally changed resources
+3. Computes the "dependency cone" of changed resources:
+   - **Top Cone**: Resources that the changed resources depend on (upstream)
+   - **Bottom Cone**: Resources that depend on the changed resources (downstream)
+4. Only refreshes resources within this cone, skipping all others
+
+### Examples
+
+```bash
+# Auto-detect changed resources and only refresh their dependency cone
+tofu plan -velocity
+
+# Explicitly target a resource and its dependencies
+tofu plan -target=aws_instance.web -velocity
+
+# Use optimized strategy with static injection for upstream dependencies
+tofu plan -velocity -velocity-strategy=optimized
+```
+
+### Performance Impact
+
+For example, if you have 500 resources but only changed 1 module with
+5 resources and 3 dependencies, velocity optimization reduces refresh
+operations from 500 API calls to approximately 8-15 calls.
+
 For configurations using
 [the `local` backend](../../language/settings/backends/local.mdx) only,
 `tofu plan` accepts the legacy command line option

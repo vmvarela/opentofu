@@ -83,7 +83,7 @@ func (h *PlanHelper) ComputeRefreshScope(
 	// Log optimization stats
 	stats := scope.Stats()
 	log.Printf("[INFO] Velocity optimization: refresh %d/%d resources (%.1f%% savings)",
-		stats.RefreshCount, stats.TotalResources, stats.SavingsPercent())
+		stats.RefreshCount, stats.TotalResources, stats.SavingsPercent)
 
 	return nil
 }
@@ -136,7 +136,7 @@ func (h *PlanHelper) GetOptimizedTargets(originalTargets []addrs.Targetable) []a
 	}
 
 	// No optimization if everything needs refresh
-	if h.scope.Stats().SavingsPercent() < 10 {
+	if h.scope.Stats().SavingsPercent < 10 {
 		return originalTargets
 	}
 
@@ -166,7 +166,7 @@ func (h *PlanHelper) LogSummary() {
 	}
 
 	log.Printf("[INFO] Velocity: Total=%d, Refresh=%d, Static=%d, Savings=%.1f%%",
-		stats.TotalResources, stats.RefreshCount, stats.StaticCount, stats.SavingsPercent())
+		stats.TotalResources, stats.RefreshCount, stats.StaticCount, stats.SavingsPercent)
 }
 
 // DetectChangedResources compares the configuration with the state to
@@ -180,4 +180,82 @@ func DetectChangedResources(
 	// TODO: Implement actual change detection by comparing config with state
 	// For now, return empty slice (no changes detected = maximum optimization)
 	return nil
+}
+
+// ConfigChangeDetector detects which resources have configuration changes
+// compared to the current state. This is used when -velocity is enabled
+// without -target to automatically determine which resources need refresh.
+type ConfigChangeDetector struct {
+	state *states.State
+}
+
+// NewConfigChangeDetector creates a detector for identifying config changes.
+func NewConfigChangeDetector(state *states.State) *ConfigChangeDetector {
+	return &ConfigChangeDetector{state: state}
+}
+
+// DetectChanges compares config resource addresses with state to identify:
+// - New resources (in config but not in state) - need refresh (will be created)
+// - Removed resources (in state but not in config) - need refresh (will be destroyed)
+// - Existing resources are assumed unchanged until proven otherwise
+//
+// Returns addresses of resources that potentially changed.
+func (d *ConfigChangeDetector) DetectChanges(configResources []addrs.ConfigResource) []addrs.AbsResource {
+	if d.state == nil {
+		return nil
+	}
+
+	changed := make([]addrs.AbsResource, 0)
+	stateResources := make(map[string]bool)
+
+	// Collect all resources in state
+	for _, ms := range d.state.Modules {
+		for _, rs := range ms.Resources {
+			key := rs.Addr.Config().String()
+			stateResources[key] = true
+		}
+	}
+
+	// Check for new resources (in config but not in state)
+	configSet := make(map[string]bool)
+	for _, configRes := range configResources {
+		key := configRes.String()
+		configSet[key] = true
+
+		if !stateResources[key] {
+			// New resource - needs to be "refreshed" (created)
+			// Find or create AbsResource from ConfigResource
+			absRes := configRes.Absolute(addrs.RootModuleInstance)
+			changed = append(changed, absRes)
+		}
+	}
+
+	// Check for removed resources (in state but not in config)
+	for _, ms := range d.state.Modules {
+		for _, rs := range ms.Resources {
+			key := rs.Addr.Config().String()
+			if !configSet[key] {
+				// Resource removed from config - will be destroyed
+				changed = append(changed, rs.Addr)
+			}
+		}
+	}
+
+	return changed
+}
+
+// DetectAllStateResources returns all resources currently in state.
+// Used when we can't detect specific changes but need a baseline.
+func (d *ConfigChangeDetector) DetectAllStateResources() []addrs.AbsResource {
+	if d.state == nil {
+		return nil
+	}
+
+	resources := make([]addrs.AbsResource, 0)
+	for _, ms := range d.state.Modules {
+		for _, rs := range ms.Resources {
+			resources = append(resources, rs.Addr)
+		}
+	}
+	return resources
 }

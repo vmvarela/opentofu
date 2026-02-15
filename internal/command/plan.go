@@ -361,6 +361,24 @@ Other Options:
                                imported with a relative path. When "none" is
                                selected, all the deprecation warnings will be
                                dropped.
+
+Performance Options:
+
+  -velocity                    Enable velocity optimization to reduce the number
+                               of provider refresh operations. Automatically
+                               detects changed resources and only refreshes
+                               their dependency cone, transforming O(n) refresh
+                               into O(subgraph). Use with -target for explicit
+                               targeting. Experimental feature.
+
+  -velocity-strategy=strategy  Select the velocity optimization strategy:
+                                 full      - Refresh all resources (default
+                                             behavior without -velocity)
+                                 targeted  - Refresh only resources in the
+                                             dependency cone of changed or
+                                             targeted resources (default)
+                                 optimized - Use static injection for upstream
+                                             dependencies, minimizing API calls
 `
 	return strings.TrimSpace(helpText)
 }

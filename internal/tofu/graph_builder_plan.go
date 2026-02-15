@@ -307,29 +307,44 @@ func (b *PlanGraphBuilder) initPlan() {
 
 	b.ConcreteResource = func(a *NodeAbstractResource) dag.Vertex {
 		return &nodeExpandPlannableResource{
-			NodeAbstractResource: a,
-			skipRefresh:          b.skipRefresh,
-			skipPlanChanges:      b.skipPlanChanges,
-			preDestroyRefresh:    b.preDestroyRefresh,
-			forceReplace:         b.ForceReplace,
+			NodeAbstractResource:  a,
+			skipRefresh:           b.skipRefresh,
+			skipPlanChanges:       b.skipPlanChanges,
+			preDestroyRefresh:     b.preDestroyRefresh,
+			forceReplace:          b.ForceReplace,
+			velocityRefreshFilter: b.velocityRefreshFilter,
 		}
 	}
 
 	b.ConcreteResourceOrphan = func(a *NodeAbstractResourceInstance) dag.Vertex {
+		// Determine skipRefresh: use velocity filter if enabled, otherwise use global setting
+		orphanSkipRefresh := b.skipRefresh
+		if b.velocityRefreshFilter != nil && b.velocityRefreshFilter.IsEnabled() {
+			if !b.velocityRefreshFilter.ShouldRefreshInstance(a.Addr) {
+				orphanSkipRefresh = true
+			}
+		}
 		return &NodePlannableResourceInstanceOrphan{
 			NodeAbstractResourceInstance: a,
-			skipRefresh:                  b.skipRefresh,
+			skipRefresh:                  orphanSkipRefresh,
 			skipPlanChanges:              b.skipPlanChanges,
 			RemoveStatements:             b.RemoveStatements,
 		}
 	}
 
 	b.ConcreteResourceInstanceDeposed = func(a *NodeAbstractResourceInstance, key states.DeposedKey) dag.Vertex {
+		// Determine skipRefresh: use velocity filter if enabled, otherwise use global setting
+		deposedSkipRefresh := b.skipRefresh
+		if b.velocityRefreshFilter != nil && b.velocityRefreshFilter.IsEnabled() {
+			if !b.velocityRefreshFilter.ShouldRefreshInstance(a.Addr) {
+				deposedSkipRefresh = true
+			}
+		}
 		return &NodePlanDeposedResourceInstanceObject{
 			NodeAbstractResourceInstance: a,
 			DeposedKey:                   key,
 
-			skipRefresh:      b.skipRefresh,
+			skipRefresh:      deposedSkipRefresh,
 			skipPlanChanges:  b.skipPlanChanges,
 			RemoveStatements: b.RemoveStatements,
 		}

@@ -819,7 +819,69 @@ func (c *Context) planWalk(ctx context.Context, config *configs.Config, prevRunS
 
 	providerFunctionTracker := make(ProviderFunctionMapping)
 
-	graph, walkOp, moreDiags := c.planGraph(ctx, config, prevRunState, opts, providerFunctionTracker)
+	// Create velocity refresh filter if velocity is enabled
+	var velocityFilter VelocityRefreshFilter
+	if opts.VelocityEnabled {
+		var engine *velocity.Engine
+		var scope *velocity.RefreshScope
+
+		if len(opts.Targets) > 0 {
+			// Use explicit targets
+			targetAddrs := make([]string, 0, len(opts.Targets))
+			for _, t := range opts.Targets {
+				targetAddrs = append(targetAddrs, t.String())
+			}
+			engine = velocity.NewEngine(prevRunState, targetAddrs)
+		} else {
+			// No targets - detect changed resources from configuration using
+			// attribute-level analysis (evaluates static expressions)
+			variables := convertInputValuesToMap(opts.SetVariables)
+			engine = velocity.NewEngineWithAttributeDetection(config, prevRunState, variables)
+		}
+
+		strategy := velocity.RefreshStrategy(opts.VelocityStrategy)
+		scope = engine.ComputeRefreshScope(strategy, opts.VelocityStaticInjection)
+
+		// Log velocity optimization statistics
+		stats := scope.Stats()
+		log.Printf("[INFO] Velocity optimization enabled: %d/%d resources to refresh (%.1f%% reduction)",
+			stats.ResourcesInSubgraph,
+			stats.TotalResources,
+			stats.SavingsPercent)
+
+		// Add informational diagnostic about velocity optimization
+		if stats.SavingsPercent > 0 {
+			var mode string
+			if len(opts.Targets) > 0 {
+				mode = "targeted"
+			} else {
+				mode = "attribute-detection"
+			}
+			diags = diags.Append(tfdiags.Sourceless(
+				tfdiags.Warning,
+				"Velocity optimization active",
+				fmt.Sprintf(
+					"Velocity mode (%s) reduced refresh operations: %d/%d resources will be refreshed (%.1f%% reduction). "+
+						"This is an experimental feature.",
+					mode,
+					stats.RefreshCount,
+					stats.TotalResources,
+					stats.SavingsPercent,
+				),
+			))
+		} else if len(opts.Targets) == 0 {
+			diags = diags.Append(tfdiags.Sourceless(
+				tfdiags.Warning,
+				"Velocity optimization: no savings",
+				"No configuration changes detected. All resources will be refreshed. "+
+					"For better optimization, use -target to specify resources to refresh.",
+			))
+		}
+
+		velocityFilter = velocity.NewRefreshFilter(scope)
+	}
+
+	graph, walkOp, moreDiags := c.planGraph(ctx, config, prevRunState, opts, providerFunctionTracker, velocityFilter)
 	diags = diags.Append(moreDiags)
 	if diags.HasErrors() {
 		return nil, diags
@@ -900,7 +962,7 @@ func (c *Context) planWalk(ctx context.Context, config *configs.Config, prevRunS
 	return plan, diags
 }
 
-func (c *Context) planGraph(ctx context.Context, config *configs.Config, prevRunState *states.State, opts *PlanOpts, providerFunctionTracker ProviderFunctionMapping) (*Graph, walkOperation, tfdiags.Diagnostics) {
+func (c *Context) planGraph(ctx context.Context, config *configs.Config, prevRunState *states.State, opts *PlanOpts, providerFunctionTracker ProviderFunctionMapping, velocityFilter VelocityRefreshFilter) (*Graph, walkOperation, tfdiags.Diagnostics) {
 	switch mode := opts.Mode; mode {
 	case plans.NormalMode:
 		graph, diags := (&PlanGraphBuilder{
@@ -919,6 +981,7 @@ func (c *Context) planGraph(ctx context.Context, config *configs.Config, prevRun
 			GenerateConfigPath:      opts.GenerateConfigPath,
 			RemoveStatements:        opts.RemoveStatements,
 			ProviderFunctionTracker: providerFunctionTracker,
+			velocityRefreshFilter:   velocityFilter,
 		}).Build(ctx, addrs.RootModuleInstance)
 		return graph, walkPlan, diags
 	case plans.RefreshOnlyMode:
@@ -934,6 +997,7 @@ func (c *Context) planGraph(ctx context.Context, config *configs.Config, prevRun
 			Operation:               walkPlan,
 			ExternalReferences:      opts.ExternalReferences,
 			ProviderFunctionTracker: providerFunctionTracker,
+			velocityRefreshFilter:   velocityFilter,
 		}).Build(ctx, addrs.RootModuleInstance)
 		return graph, walkPlan, diags
 	case plans.DestroyMode:
@@ -947,6 +1011,7 @@ func (c *Context) planGraph(ctx context.Context, config *configs.Config, prevRun
 			skipRefresh:             opts.SkipRefresh,
 			Operation:               walkPlanDestroy,
 			ProviderFunctionTracker: providerFunctionTracker,
+			velocityRefreshFilter:   velocityFilter,
 		}).Build(ctx, addrs.RootModuleInstance)
 		return graph, walkPlanDestroy, diags
 	default:
@@ -1118,7 +1183,7 @@ func (c *Context) PlanGraphForUI(config *configs.Config, prevRunState *states.St
 
 	opts := &PlanOpts{Mode: mode}
 
-	graph, _, moreDiags := c.planGraph(context.TODO(), config, prevRunState, opts, make(ProviderFunctionMapping))
+	graph, _, moreDiags := c.planGraph(context.TODO(), config, prevRunState, opts, make(ProviderFunctionMapping), nil)
 	diags = diags.Append(moreDiags)
 	return graph, diags
 }
@@ -1214,4 +1279,82 @@ func warnOnUsedDeprecatedVars(inputs InputValues, decls map[string]*configs.Vari
 		}
 	}
 	return diags
+}
+
+// extractConfigResources extracts all resource addresses from the configuration.
+// This is used by velocity optimization to detect which resources have changed.
+func extractConfigResources(config *configs.Config) []addrs.ConfigResource {
+	if config == nil {
+		return nil
+	}
+
+	var resources []addrs.ConfigResource
+
+	// Process root module
+	extractModuleResources(config.Module, config.Path, &resources)
+
+	// Process child modules recursively
+	for name, childConfig := range config.Children {
+		childPath := config.Path.Child(name)
+		extractModuleResourcesRecursive(childConfig, childPath, &resources)
+	}
+
+	return resources
+}
+
+// extractModuleResources extracts resources from a single module.
+func extractModuleResources(module *configs.Module, path addrs.Module, resources *[]addrs.ConfigResource) {
+	if module == nil {
+		return
+	}
+
+	for name, res := range module.ManagedResources {
+		addr := addrs.ConfigResource{
+			Module: path,
+			Resource: addrs.Resource{
+				Mode: addrs.ManagedResourceMode,
+				Type: res.Type,
+				Name: name,
+			},
+		}
+		*resources = append(*resources, addr)
+	}
+
+	for name, res := range module.DataResources {
+		addr := addrs.ConfigResource{
+			Module: path,
+			Resource: addrs.Resource{
+				Mode: addrs.DataResourceMode,
+				Type: res.Type,
+				Name: name,
+			},
+		}
+		*resources = append(*resources, addr)
+	}
+}
+
+// extractModuleResourcesRecursive recursively extracts resources from child modules.
+func extractModuleResourcesRecursive(config *configs.Config, path addrs.Module, resources *[]addrs.ConfigResource) {
+	extractModuleResources(config.Module, path, resources)
+
+	for name, childConfig := range config.Children {
+		childPath := path.Child(name)
+		extractModuleResourcesRecursive(childConfig, childPath, resources)
+	}
+}
+
+// convertInputValuesToMap converts InputValues to a map of cty.Value for
+// use in velocity attribute change detection.
+func convertInputValuesToMap(inputs InputValues) map[string]cty.Value {
+	if inputs == nil {
+		return nil
+	}
+
+	result := make(map[string]cty.Value)
+	for name, iv := range inputs {
+		if iv != nil && iv.Value != cty.NilVal {
+			result[name] = iv.Value
+		}
+	}
+	return result
 }

@@ -9,7 +9,9 @@ import (
 	"log"
 
 	"github.com/opentofu/opentofu/internal/addrs"
+	"github.com/opentofu/opentofu/internal/configs"
 	"github.com/opentofu/opentofu/internal/states"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // RefreshStrategy defines how refresh operations should be executed.
@@ -213,6 +215,9 @@ type RefreshScope struct {
 
 	// Cone is the computed dependency cone (if applicable)
 	Cone *DependencyCone
+
+	// stats contains precomputed statistics
+	stats RefreshStats
 }
 
 // RefreshAddresses returns the addresses that need to be refreshed.
@@ -257,22 +262,31 @@ func (s *RefreshScope) IsStatic(addr addrs.AbsResource) bool {
 
 // Stats returns optimization statistics.
 func (s *RefreshScope) Stats() RefreshStats {
-	return RefreshStats{
-		TotalResources: len(s.AllResources),
-		RefreshCount:   len(s.ToRefresh),
-		StaticCount:    len(s.Static),
+	if s.stats.TotalResources > 0 {
+		return s.stats
 	}
+	// Compute on demand if not pre-computed
+	stats := RefreshStats{
+		TotalResources:      len(s.AllResources),
+		RefreshCount:        len(s.ToRefresh),
+		StaticCount:         len(s.Static),
+		ResourcesInSubgraph: len(s.ToRefresh),
+	}
+	stats.SavingsPercent = stats.ComputeSavingsPercent()
+	return stats
 }
 
 // RefreshStats contains statistics about the refresh optimization.
 type RefreshStats struct {
-	TotalResources int
-	RefreshCount   int
-	StaticCount    int
+	TotalResources      int
+	RefreshCount        int
+	StaticCount         int
+	ResourcesInSubgraph int
+	SavingsPercent      float64
 }
 
-// SavingsPercent returns the percentage of resources that don't need refresh.
-func (s RefreshStats) SavingsPercent() float64 {
+// ComputeSavingsPercent returns the percentage of resources that don't need refresh.
+func (s *RefreshStats) ComputeSavingsPercent() float64 {
 	if s.TotalResources == 0 {
 		return 0
 	}
@@ -282,5 +296,155 @@ func (s RefreshStats) SavingsPercent() float64 {
 // String returns a human-readable representation.
 func (s RefreshStats) String() string {
 	return fmt.Sprintf("Refresh %d/%d resources (%.1f%% savings)",
-		s.RefreshCount, s.TotalResources, s.SavingsPercent())
+		s.RefreshCount, s.TotalResources, s.SavingsPercent)
+}
+
+// Engine is a simplified interface to the velocity optimization system.
+// This is the main entry point used by the tofu package.
+type Engine struct {
+	state           *states.State
+	stateGraph      *StateGraph
+	targetAddrs     []string
+	changedFromConf []addrs.AbsResource // Resources detected as changed from config comparison
+}
+
+// NewEngine creates a new velocity Engine with the given state and target addresses.
+func NewEngine(state *states.State, targetAddrs []string) *Engine {
+	return &Engine{
+		state:       state,
+		stateGraph:  FromState(state),
+		targetAddrs: targetAddrs,
+	}
+}
+
+// NewEngineWithChangeDetection creates a velocity Engine that automatically
+// detects which resources have configuration changes and uses those as targets.
+// This is used when -velocity is enabled without -target.
+func NewEngineWithChangeDetection(state *states.State, configResources []addrs.ConfigResource) *Engine {
+	detector := NewConfigChangeDetector(state)
+	changedResources := detector.DetectChanges(configResources)
+
+	// Convert AbsResource to string addresses
+	targetAddrs := make([]string, len(changedResources))
+	for i, res := range changedResources {
+		targetAddrs[i] = res.String()
+	}
+
+	return &Engine{
+		state:           state,
+		stateGraph:      FromState(state),
+		targetAddrs:     targetAddrs,
+		changedFromConf: changedResources,
+	}
+}
+
+// NewEngineWithAttributeDetection creates a velocity Engine that detects
+// attribute-level changes by evaluating static expressions (literals, variables,
+// locals) and comparing them with state values. This provides more accurate
+// change detection than structural-only detection.
+func NewEngineWithAttributeDetection(
+	config *configs.Config,
+	state *states.State,
+	variables map[string]cty.Value,
+) *Engine {
+	// Use attribute-level change detection
+	detector := NewAttributeChangeDetector(config, state, variables)
+	changedResources := detector.DetectChangedResources()
+
+	// Convert AbsResource to string addresses
+	targetAddrs := make([]string, len(changedResources))
+	for i, res := range changedResources {
+		targetAddrs[i] = res.String()
+	}
+
+	log.Printf("[DEBUG] Velocity: Attribute detection found %d changed resources", len(changedResources))
+
+	return &Engine{
+		state:           state,
+		stateGraph:      FromState(state),
+		targetAddrs:     targetAddrs,
+		changedFromConf: changedResources,
+	}
+}
+
+// ComputeRefreshScope calculates which resources need to be refreshed based on
+// the refresh strategy and static injection settings.
+func (e *Engine) ComputeRefreshScope(strategy RefreshStrategy, staticInjection bool) *RefreshScope {
+	scope := &RefreshScope{
+		Strategy:     strategy,
+		AllResources: e.stateGraph.AllNodes(),
+	}
+
+	// Convert string addresses to AbsResource
+	targetAddrs := e.parseTargetAddrs()
+
+	switch strategy {
+	case RefreshStrategyFull:
+		// Full refresh - all resources
+		scope.ToRefresh = scope.AllResources
+		scope.Static = nil
+
+	case RefreshStrategyTargeted:
+		// Compute minimal subgraph based on targets
+		if len(targetAddrs) == 0 {
+			// No targets means refresh everything
+			scope.ToRefresh = scope.AllResources
+		} else {
+			subgraph := e.stateGraph.ComputeMinimalSubgraph(targetAddrs)
+			scope.ToRefresh = subgraph.AllNodes()
+			scope.Subgraph = subgraph
+		}
+
+	case RefreshStrategyOptimized:
+		// Use change detection and static injection
+		if len(targetAddrs) == 0 {
+			// No targets - get all resource addresses
+			for _, node := range e.stateGraph.nodes {
+				targetAddrs = append(targetAddrs, node.Addr)
+			}
+		}
+
+		// For optimized strategy, compute the change cone
+		cone := e.stateGraph.ComputeChangeCone(targetAddrs, nil)
+		scope.Cone = cone
+
+		if staticInjection {
+			scope.ToRefresh = cone.RequiresRefresh
+			scope.Static = cone.StaticInjectable
+		} else {
+			scope.ToRefresh = append(cone.RequiresRefresh, cone.StaticInjectable...)
+		}
+
+		// Also store the subgraph for ordering
+		scope.Subgraph = e.stateGraph.ComputeMinimalSubgraphWithCone(cone)
+	}
+
+	// Compute stats
+	stats := &RefreshStats{
+		TotalResources:      len(scope.AllResources),
+		RefreshCount:        len(scope.ToRefresh),
+		StaticCount:         len(scope.Static),
+		ResourcesInSubgraph: len(scope.ToRefresh),
+	}
+	stats.SavingsPercent = stats.ComputeSavingsPercent()
+	scope.stats = *stats
+
+	return scope
+}
+
+// parseTargetAddrs converts string target addresses to AbsResource.
+func (e *Engine) parseTargetAddrs() []addrs.AbsResource {
+	result := make([]addrs.AbsResource, 0, len(e.targetAddrs))
+
+	for _, target := range e.targetAddrs {
+		// Look up the resource in the state graph by string match
+		for _, node := range e.stateGraph.nodes {
+			if node.Addr.String() == target {
+				result = append(result, node.Addr)
+				break
+			}
+		}
+	}
+
+	return result
 }

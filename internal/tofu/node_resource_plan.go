@@ -56,6 +56,11 @@ type nodeExpandPlannableResource struct {
 	// At the time of introducing this, it was strictly meant for ephemeral resources, but if there
 	// will be other closeable resources, this could be used for those too.
 	closers []resourceCloser
+
+	// velocityRefreshFilter provides velocity-based refresh filtering per instance.
+	// When set, individual resource instances will consult this filter to
+	// determine if they should refresh or use cached state values.
+	velocityRefreshFilter VelocityRefreshFilter
 }
 
 var (
@@ -377,6 +382,15 @@ func (n *nodeExpandPlannableResource) resourceInstanceSubgraph(ctx context.Conte
 		a.preDestroyRefresh = n.preDestroyRefresh
 		a.generateConfigPath = n.generateConfigPath
 
+		// Determine skipRefresh: use velocity filter if enabled, otherwise use global setting
+		instanceSkipRefresh := n.skipRefresh
+		if n.velocityRefreshFilter != nil && n.velocityRefreshFilter.IsEnabled() {
+			// If velocity is enabled, check if this specific instance should be refreshed
+			if !n.velocityRefreshFilter.ShouldRefreshInstance(a.Addr) {
+				instanceSkipRefresh = true
+			}
+		}
+
 		m = &NodePlannableResourceInstance{
 			NodeAbstractResourceInstance: a,
 
@@ -384,7 +398,7 @@ func (n *nodeExpandPlannableResource) resourceInstanceSubgraph(ctx context.Conte
 			// to force on CreateBeforeDestroy due to dependencies on other
 			// nodes that have it.
 			ForceCreateBeforeDestroy: n.CreateBeforeDestroy(),
-			skipRefresh:              n.skipRefresh,
+			skipRefresh:              instanceSkipRefresh,
 			skipPlanChanges:          n.skipPlanChanges,
 			forceReplace:             n.forceReplace,
 		}
@@ -412,9 +426,17 @@ func (n *nodeExpandPlannableResource) resourceInstanceSubgraph(ctx context.Conte
 		a.ProvisionerSchemas = n.ProvisionerSchemas
 		a.ProviderMetas = n.ProviderMetas
 
+		// Determine skipRefresh: use velocity filter if enabled, otherwise use global setting
+		orphanSkipRefresh := n.skipRefresh
+		if n.velocityRefreshFilter != nil && n.velocityRefreshFilter.IsEnabled() {
+			if !n.velocityRefreshFilter.ShouldRefreshInstance(a.Addr) {
+				orphanSkipRefresh = true
+			}
+		}
+
 		return &NodePlannableResourceInstanceOrphan{
 			NodeAbstractResourceInstance: a,
-			skipRefresh:                  n.skipRefresh,
+			skipRefresh:                  orphanSkipRefresh,
 			skipPlanChanges:              n.skipPlanChanges,
 		}
 	}
