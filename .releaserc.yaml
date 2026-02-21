@@ -1,6 +1,5 @@
 preset: conventionalcommits
 plugins:
-  - path: '@semantic-release/commit-analyzer'
-  - path: '@semantic-release/release-notes-generator'
-  - path: '@semantic-release/git'
-  - path: '@semantic-release/github'
+  - '@semantic-release/commit-analyzer'
+  - '@semantic-release/release-notes-generator'
+  - '@semantic-release/github'
