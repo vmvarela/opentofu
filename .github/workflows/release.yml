@@ -49,6 +49,9 @@ jobs:
         id: semantic
         run: |
           OUTPUT=$(npx semantic-release --dry-run 2>&1) || true
+          echo "--- semantic-release dry-run output ---"
+          echo "$OUTPUT"
+          echo "--- end dry-run output ---"
           VERSION=$(echo "$OUTPUT" | grep -oP 'The next release version is \K[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?' || true)
           if [ -n "$VERSION" ]; then
             echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
