@@ -1,27 +1,6 @@
-# semantic-release configuration
-# https://semantic-release.gitbook.io/semantic-release/usage/configuration
-
-tagFormat: "v${version}"
-
-branches:
-  - name: master
-  - name: next
-    prerelease: rc
-    channel: next
-  - name: beta
-    prerelease: beta
-    channel: beta
-
+preset: conventionalcommits
 plugins:
-  # 1. Analyze commits (conventional commits)
-  - - "@semantic-release/commit-analyzer"
-    - preset: conventionalcommits
-
-  # 2. Generate release notes
-  - - "@semantic-release/release-notes-generator"
-    - preset: conventionalcommits
-
-  # 3. Publish GitHub release
-  - - "@semantic-release/github"
-    - successComment: false
-      failComment: false
+  - path: '@semantic-release/commit-analyzer'
+  - path: '@semantic-release/release-notes-generator'
+  - path: '@semantic-release/git'
+  - path: '@semantic-release/github'
