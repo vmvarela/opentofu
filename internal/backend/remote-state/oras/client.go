@@ -390,8 +390,8 @@ func (c *RemoteClient) put(ctx context.Context, state []byte) error {
 
 	// Async retention with semaphore to limit concurrent goroutines.
 	// The expensive tag listing is deferred to this goroutine so that Put()
-	// returns quickly. Derive from the caller's context so that shutdown
-	// is propagated, but add a timeout to prevent indefinite runs.
+	// returns quickly. Use context.Background() so that retention is not
+	// cancelled when the caller's context ends (e.g. after tofu apply returns).
 	sem := c.retentionSem
 	if sem == nil {
 		sem = defaultRetentionSem
@@ -400,7 +400,7 @@ func (c *RemoteClient) put(ctx context.Context, state []byte) error {
 	case sem <- struct{}{}:
 		go func() {
 			defer func() { <-sem }()
-			asyncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			asyncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			existing, listErr := c.listExistingVersions(asyncCtx)
 			if listErr != nil {

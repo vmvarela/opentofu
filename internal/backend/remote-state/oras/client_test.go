@@ -131,9 +131,6 @@ func (d delegatingRepo) Tag(ctx context.Context, desc ocispec.Descriptor, refere
 func (d delegatingRepo) Delete(ctx context.Context, target ocispec.Descriptor) error {
 	return d.inner.Delete(ctx, target)
 }
-func (d delegatingRepo) Exists(ctx context.Context, target ocispec.Descriptor) (bool, error) {
-	return d.inner.Exists(ctx, target)
-}
 func (d delegatingRepo) Tags(ctx context.Context, last string, fn func(tags []string) error) error {
 	return d.inner.Tags(ctx, last, fn)
 }

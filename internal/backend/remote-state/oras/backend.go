@@ -396,7 +396,6 @@ type orasRepository interface {
 	Resolve(ctx context.Context, reference string) (ocispec.Descriptor, error)
 	Tag(ctx context.Context, desc ocispec.Descriptor, reference string) error
 	Delete(ctx context.Context, target ocispec.Descriptor) error
-	Exists(ctx context.Context, target ocispec.Descriptor) (bool, error)
 	Tags(ctx context.Context, last string, fn func(tags []string) error) error
 }
 

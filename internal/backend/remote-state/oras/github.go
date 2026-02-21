@@ -98,7 +98,6 @@ func deleteGitHubPackageVersionByTag(ctx context.Context, client *http.Client, b
 }
 
 func deleteFromGitHubPackagesEndpoint(ctx context.Context, client *http.Client, baseURL, tag, token string) error {
-
 	versionID, err := findGitHubVersionIDByTag(ctx, client, baseURL, tag, token)
 	if err != nil {
 		return err
